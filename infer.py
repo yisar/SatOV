@@ -14,7 +14,7 @@ from torchvision.utils import draw_segmentation_masks
 import pydensecrf.densecrf as dcrf
 from pydensecrf.utils import unary_from_softmax, create_pairwise_bilateral, create_pairwise_gaussian
 
-from libs.models import DenseClip
+from model import DenseClip
 
 def get_gaussian_mask(size, sigma=0.4):
     """生成中心权重高、边缘权重低的高斯矩阵，用于平滑接缝"""

@@ -12,14 +12,7 @@ try:
 except ImportError:
     ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 加载默认标签逻辑
-label_file = os.path.join(ROOT, 'imagenet_class_index.json')
-if os.path.exists(label_file):
-    with open(label_file, 'r') as f:
-        labels = json.load(f)
-    _DEFAULT_CLASSNAMES = [value[1] for value in labels.values()]
-else:
-    _DEFAULT_CLASSNAMES = ["object"]
+_DEFAULT_CLASSNAMES = ["object"]
 
 _DEFAULT_TEMPLATES = ['a photo of a {}.']
 
