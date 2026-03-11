@@ -68,7 +68,8 @@ def main():
     stride = args.stride
 
     # 类别定义与配色
-    classnames = ['pool', 'grass', 'pavement', 'road', 'tree', 'river', 'cropland', 'building', 'house']
+    classnames = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
+             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
     custom_palette = [
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
@@ -141,7 +142,7 @@ def main():
         ax[0].axis('off')
 
         ax[1].imshow(seg_result.permute(1, 2, 0).numpy())
-        ax[1].set_title("Sliding Window + CRF Refined")
+        ax[1].set_title("Predict Result")
         ax[1].axis('off')
 
         # 添加图例

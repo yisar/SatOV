@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from upa import UPA
 
 # 尝试加载 ROOT 路径
 try:
@@ -14,7 +13,6 @@ except ImportError:
     ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _DEFAULT_CLASSNAMES = ["object"]
-
 _DEFAULT_TEMPLATES = ['a photo of a {}.']
 
 class DenseClip(nn.Module):
@@ -37,8 +35,7 @@ class DenseClip(nn.Module):
         # 2. 维度定义
         self.feat_dim = self.visual.conv1.out_channels # ViT-B-16 为 768
         self.embed_dim = model.text_projection.shape[1] if hasattr(model, 'text_projection') else self.feat_dim
-        self.upa = UPA
-
+        
         # 3. 加载 AnyUp 引导上采样模块
         print(f"正在加载 AnyUp 预训练权重...")
         try:
@@ -55,23 +52,46 @@ class DenseClip(nn.Module):
                 if self.v_proj.bias is not None:
                     nn.init.constant_(self.v_proj.bias, 0)
 
-        # 5. 文本分支
+        # 5. 文本分支配置
         self.classnames = classnames if classnames is not None else _DEFAULT_CLASSNAMES
         self.templates = templates if templates is not None else _DEFAULT_TEMPLATES
         self.temperature = nn.Parameter(torch.ones([]) * 0.07)
+        
+        # 6. 初始化支持近义词的零样本分类器
         self._init_zeroshot_classifier()
 
     @torch.no_grad()
     def _init_zeroshot_classifier(self):
-        text_embeds = []
-        for cls_name in self.classnames:
-            texts = [t.format(cls_name) for t in self.templates]
-            tokens = open_clip.tokenize(texts).to(self.device)
-            embed = self.clip_model.encode_text(tokens)
-            embed = F.normalize(embed.mean(dim=0), dim=-1)
-            text_embeds.append(embed)
-        weights = torch.stack(text_embeds, dim=1).to(self.device)
-        self.zeroshot_weights = nn.Parameter(F.normalize(weights, dim=0))
+        """
+        核心改造：支持近义词。
+        逻辑：对每个类别组内的所有近义词进行编码，取均值后归一化。
+        """
+        final_text_embeds = []
+        
+        for class_group in self.classnames:
+            # 拆分近义词，例如 'tree,forest' -> ['tree', 'forest']
+            synonyms = [s.strip() for s in class_group.split(',')]
+            
+            group_embeds = []
+            for cls_name in synonyms:
+                # 对当前词应用所有 Prompt 模板
+                texts = [t.format(cls_name) for t in self.templates]
+                tokens = open_clip.tokenize(texts).to(self.device)
+                
+                # 编码并计算该词在所有模板下的平均嵌入
+                class_embed = self.clip_model.encode_text(tokens)  # [num_templates, embed_dim]
+                class_embed = F.normalize(class_embed, dim=-1)
+                group_embeds.append(class_embed.mean(dim=0))
+            
+            # 将该组内所有近义词的嵌入取平均，作为该类别的最终语义中心
+            combined_embed = torch.stack(group_embeds, dim=0).mean(dim=0)
+            # 重新归一化以保证余弦相似度计算准确
+            combined_embed = F.normalize(combined_embed, dim=-1)
+            final_text_embeds.append(combined_embed)
+            
+        # 构造最终权重矩阵 [embed_dim, num_classes]
+        weights = torch.stack(final_text_embeds, dim=1).to(self.device)
+        self.zeroshot_weights = nn.Parameter(weights)
 
     def _stem(self, x, hr_guide: Optional[torch.Tensor] = None):
         B, C, H, W = x.shape
@@ -84,10 +104,10 @@ class DenseClip(nn.Module):
         cls_token = self.visual.class_embedding.to(x_tokens.dtype)
         pos_embed = self.visual.positional_embedding.to(x_tokens.dtype)
         
-        # 插值逻辑
         cls_pos = pos_embed[:1, :]
         patch_pos = pos_embed[1:, :]
         old_grid = int(patch_pos.shape[0]**0.5)
+        
         if old_grid != grid_h or old_grid != grid_w:
             patch_pos = patch_pos.reshape(1, old_grid, old_grid, -1).permute(0, 3, 1, 2)
             patch_pos = F.interpolate(patch_pos, size=(grid_h, grid_w), mode='bicubic', align_corners=False)
@@ -100,7 +120,7 @@ class DenseClip(nn.Module):
         x_tokens = x_tokens + new_pos_embed
         x_tokens = self.visual.ln_pre(x_tokens)
 
-        # --- ClearCLIP 改造 ---
+        # --- ClearCLIP 改造：使用 Self-Self Attention 获取密集特征 ---
         blocks = self.visual.transformer.resblocks
         for i in range(len(blocks) - 1):
             x_tokens = blocks[i](x_tokens)
@@ -118,7 +138,7 @@ class DenseClip(nn.Module):
         q = q.view(B, N, num_heads, head_dim).transpose(1, 2)
         v = v.view(B, N, num_heads, head_dim).transpose(1, 2)
         
-        # Self-Self Attention (ClearCLIP)
+        # Self-Self Attention (ClearCLIP 核心逻辑)
         attn_matrix = (q @ q.transpose(-2, -1)) * (head_dim ** -0.5)
         attn_matrix = attn_matrix.softmax(dim=-1)
         attn_out = (attn_matrix @ v).transpose(1, 2).reshape(B, N, -1)
@@ -126,22 +146,27 @@ class DenseClip(nn.Module):
         x_feat = F.linear(attn_out, attn.out_proj.weight, attn.out_proj.bias)
         x_feat = self.visual.ln_post(x_feat)
 
-        # --- AnyUp 引导上采样 ---
+        # --- 引导上采样 ---
         lr_features = x_feat[:, 1:, :].permute(0, 2, 1).reshape(B, self.feat_dim, grid_h, grid_w)
-        if self.upa is not None:
-            guide = hr_guide if hr_guide is not None else x
-            up_features = self.upa(guide, lr_features)
-        else if self.any_up is not None:
-            guide = hr_guide if hr_guide is not None else x
+        
+        guide = hr_guide if hr_guide is not None else x
+        if self.any_up is not None:
             up_features = self.any_up(guide, lr_features)
         else:
+            # 这里的 self.upa 原代码逻辑稍微有点混乱，统一优先使用 AnyUp，否则回退
             up_features = F.interpolate(lr_features, size=(H, W), mode='bilinear', align_corners=False)
             
         return up_features
 
     def forward(self, images, hr_guide: Optional[torch.Tensor] = None):
+        # 1. 提取密集特征
         features = self._stem(images.to(self.device), hr_guide.to(self.device) if hr_guide is not None else None)
+        # 2. 视觉投影并归一化
         features = F.normalize(self.v_proj(features), dim=1)
         B, C, H_f, W_f = features.shape
+        # 3. 计算与近义词权重矩阵的相似度 logits
+        # features: [B, C, H, W] -> [B*H*W, C]
+        # weights: [C, num_classes]
         logits = (features.permute(0, 2, 3, 1).reshape(-1, C) @ self.zeroshot_weights) / self.temperature
+        # 4. 还原形状为 [B, num_classes, H, W]
         return logits.reshape(B, H_f, W_f, -1).permute(0, 3, 1, 2)
