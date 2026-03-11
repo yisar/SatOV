@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
+from upa import UPA
 
 # 尝试加载 ROOT 路径
 try:
@@ -36,6 +37,7 @@ class DenseClip(nn.Module):
         # 2. 维度定义
         self.feat_dim = self.visual.conv1.out_channels # ViT-B-16 为 768
         self.embed_dim = model.text_projection.shape[1] if hasattr(model, 'text_projection') else self.feat_dim
+        self.upa = UPA
 
         # 3. 加载 AnyUp 引导上采样模块
         print(f"正在加载 AnyUp 预训练权重...")
@@ -126,7 +128,10 @@ class DenseClip(nn.Module):
 
         # --- AnyUp 引导上采样 ---
         lr_features = x_feat[:, 1:, :].permute(0, 2, 1).reshape(B, self.feat_dim, grid_h, grid_w)
-        if self.any_up is not None:
+        if self.upa is not None:
+            guide = hr_guide if hr_guide is not None else x
+            up_features = self.upa(guide, lr_features)
+        else if self.any_up is not None:
             guide = hr_guide if hr_guide is not None else x
             up_features = self.any_up(guide, lr_features)
         else:
