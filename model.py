@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
+from upa import UPA
 
 # 尝试加载 ROOT 路径
 try:
@@ -43,6 +44,7 @@ class DenseClip(nn.Module):
         except Exception as e:
             print(f"警告：AnyUp 加载失败({e})，将回退至线性插值。")
             self.any_up = None
+        self.upa = UPA
 
         # 4. 初始化视觉投影 (768 -> 512)
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
@@ -150,7 +152,9 @@ class DenseClip(nn.Module):
         lr_features = x_feat[:, 1:, :].permute(0, 2, 1).reshape(B, self.feat_dim, grid_h, grid_w)
         
         guide = hr_guide if hr_guide is not None else x
-        if self.any_up is not None:
+        if self.upa is not None:
+            up_features = self.upa(guide, lr_features)
+        elif self.any_up is not None:
             up_features = self.any_up(guide, lr_features)
         else:
             # 这里的 self.upa 原代码逻辑稍微有点混乱，统一优先使用 AnyUp，否则回退
