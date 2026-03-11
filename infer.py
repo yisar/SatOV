@@ -68,8 +68,8 @@ def main():
     stride = args.stride
 
     # 类别定义与配色
-    classnames = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
-             'tree,forest', 'water,river', 'cropland,field', 'building,roof,house']
+    classnames = ['background', 'bareland,barren', 'pavement', 'road',
+             'tree,forest', 'water,river','grass', 'cropland,field', 'building,roof,house']
     custom_palette = [
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)

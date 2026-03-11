@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import open_clip
 from upa import UPA
 
-# 尝试加载 ROOT 路径
+# 尝试加载 ROOT 路径与外部模块
 try:
     from libs.definitions import ROOT
 except ImportError:
@@ -34,22 +34,27 @@ class DenseClip(nn.Module):
         self.visual = self.clip_model.visual
 
         # 2. 维度定义
-        self.feat_dim = self.visual.conv1.out_channels # ViT-B-16 为 768
+        # ViT-B-16 的 conv1.out_channels 通常为 768
+        self.feat_dim = self.visual.conv1.out_channels 
         self.embed_dim = model.text_projection.shape[1] if hasattr(model, 'text_projection') else self.feat_dim
         
-        # 3. 加载 AnyUp 引导上采样模块
-        print(f"正在加载 AnyUp 预训练权重...")
+        # 3. 加载 AnyUp / UPA 引导上采样模块
+        print(f"正在加载上采样模块...")
         try:
             self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
         except Exception as e:
-            print(f"警告：AnyUp 加载失败({e})，将回退至线性插值。")
+            print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
             self.any_up = None
-        self.upa = UPA
+        
+        # 这里的 UPA 假设是一个 nn.Module 类
+        self.upa = None # 如果有具体的 UPA 实现类，请在此初始化
 
-        # 4. 初始化视觉投影 (768 -> 512)
+        # 4. 初始化视觉投影 (例如 768 -> 512)
+        # 将 CLIP 原生的视觉投影权重迁移到 Conv2d(1x1) 中，方便处理特征图
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
         if hasattr(self.visual, 'proj') and self.visual.proj is not None:
             with torch.no_grad():
+                # 权重转置并扩展为 [out, in, 1, 1]
                 self.v_proj.weight.data.copy_(self.visual.proj.data.T.unsqueeze(-1).unsqueeze(-1))
                 if self.v_proj.bias is not None:
                     nn.init.constant_(self.v_proj.bias, 0)
@@ -59,49 +64,41 @@ class DenseClip(nn.Module):
         self.templates = templates if templates is not None else _DEFAULT_TEMPLATES
         self.temperature = nn.Parameter(torch.ones([]) * 0.07)
         
-        # 6. 初始化支持近义词的零样本分类器
+        # 6. 初始化零样本分类器 (支持近义词)
         self._init_zeroshot_classifier()
 
     @torch.no_grad()
     def _init_zeroshot_classifier(self):
         """
-        核心改造：支持近义词。
-        逻辑：对每个类别组内的所有近义词进行编码，取均值后归一化。
+        核心逻辑：对每个类别组内的所有近义词进行编码，取均值后归一化。
         """
         final_text_embeds = []
-        
         for class_group in self.classnames:
-            # 拆分近义词，例如 'tree,forest' -> ['tree', 'forest']
             synonyms = [s.strip() for s in class_group.split(',')]
-            
             group_embeds = []
             for cls_name in synonyms:
-                # 对当前词应用所有 Prompt 模板
                 texts = [t.format(cls_name) for t in self.templates]
                 tokens = open_clip.tokenize(texts).to(self.device)
                 
-                # 编码并计算该词在所有模板下的平均嵌入
-                class_embed = self.clip_model.encode_text(tokens)  # [num_templates, embed_dim]
+                # [num_templates, embed_dim]
+                class_embed = self.clip_model.encode_text(tokens)
                 class_embed = F.normalize(class_embed, dim=-1)
                 group_embeds.append(class_embed.mean(dim=0))
             
-            # 将该组内所有近义词的嵌入取平均，作为该类别的最终语义中心
             combined_embed = torch.stack(group_embeds, dim=0).mean(dim=0)
-            # 重新归一化以保证余弦相似度计算准确
             combined_embed = F.normalize(combined_embed, dim=-1)
             final_text_embeds.append(combined_embed)
             
-        # 构造最终权重矩阵 [embed_dim, num_classes]
         weights = torch.stack(final_text_embeds, dim=1).to(self.device)
         self.zeroshot_weights = nn.Parameter(weights)
 
     def _stem(self, x, hr_guide: Optional[torch.Tensor] = None):
         B, C, H, W = x.shape
         
-        # --- CLIP 视觉编码器 + 动态位置编码插值 ---
+        # --- 1. CLIP 视觉预处理与位置编码插值 ---
         x_in = self.visual.conv1(x) 
         grid_h, grid_w = x_in.shape[2], x_in.shape[3]
-        x_tokens = x_in.flatten(2).permute(0, 2, 1)
+        x_tokens = x_in.flatten(2).permute(0, 2, 1) # [B, HW, D]
         
         cls_token = self.visual.class_embedding.to(x_tokens.dtype)
         pos_embed = self.visual.positional_embedding.to(x_tokens.dtype)
@@ -122,55 +119,76 @@ class DenseClip(nn.Module):
         x_tokens = x_tokens + new_pos_embed
         x_tokens = self.visual.ln_pre(x_tokens)
 
-        # --- ClearCLIP 改造：使用 Self-Self Attention 获取密集特征 ---
+        # --- 2. Transformer 前馈 (保留前 L-1 层) ---
         blocks = self.visual.transformer.resblocks
         for i in range(len(blocks) - 1):
             x_tokens = blocks[i](x_tokens)
             
+        # --- 3. ClearCLIP 核心：最后一层 Self-Self Attention ---
         last_block = blocks[-1]
         x_norm = last_block.ln_1(x_tokens)
         attn = last_block.attn
         
+        # 提取 QKV 矩阵
         qkv = F.linear(x_norm, attn.in_proj_weight, attn.in_proj_bias)
         q, k, v = qkv.chunk(3, dim=-1)
-        B, N, _ = q.shape
+        B, N, D = q.shape
         num_heads = attn.num_heads
-        head_dim = _ // num_heads
+        head_dim = D // num_heads
         
         q = q.view(B, N, num_heads, head_dim).transpose(1, 2)
         v = v.view(B, N, num_heads, head_dim).transpose(1, 2)
         
-        # Self-Self Attention (ClearCLIP 核心逻辑)
+        # Self-Self Attention 计算 (Patch 间关系，不依赖全局 K)
         attn_matrix = (q @ q.transpose(-2, -1)) * (head_dim ** -0.5)
         attn_matrix = attn_matrix.softmax(dim=-1)
         attn_out = (attn_matrix @ v).transpose(1, 2).reshape(B, N, -1)
         
+        # 投影与后归一化
         x_feat = F.linear(attn_out, attn.out_proj.weight, attn.out_proj.bias)
-        x_feat = self.visual.ln_post(x_feat)
+        x_feat = self.visual.ln_post(x_feat) # [B, N, D]
 
-        # --- 引导上采样 ---
-        lr_features = x_feat[:, 1:, :].permute(0, 2, 1).reshape(B, self.feat_dim, grid_h, grid_w)
+        # --- 4. 消除 CLS 全局偏置 (De-biasing) ---
+        # 逻辑：Patch Tokens = Patch Tokens - CLS Token
+        cls_token_out = x_feat[:, :1, :]      # [B, 1, D]
+        patch_tokens_out = x_feat[:, 1:, :]   # [B, HW, D]
         
+        # 利用广播机制，让每个 patch 减去该图像对应的全局背景均值
+        debiased_patches = patch_tokens_out - cls_token_out 
+        
+        # 将特征还原为 2D 形状
+        lr_features = debiased_patches.permute(0, 2, 1).reshape(B, self.feat_dim, grid_h, grid_w)
+
+        # --- 5. 引导上采样 ---
         guide = hr_guide if hr_guide is not None else x
         if self.upa is not None:
             up_features = self.upa(guide, lr_features)
         elif self.any_up is not None:
             up_features = self.any_up(guide, lr_features)
         else:
-            # 这里的 self.upa 原代码逻辑稍微有点混乱，统一优先使用 AnyUp，否则回退
             up_features = F.interpolate(lr_features, size=(H, W), mode='bilinear', align_corners=False)
             
         return up_features
 
     def forward(self, images, hr_guide: Optional[torch.Tensor] = None):
-        # 1. 提取密集特征
+        """
+        输入: images [B, 3, H, W]
+        输出: logits [B, num_classes, H, W]
+        """
+        # 1. 提取密集特征 (已去偏置并上采样)
         features = self._stem(images.to(self.device), hr_guide.to(self.device) if hr_guide is not None else None)
-        # 2. 视觉投影并归一化
-        features = F.normalize(self.v_proj(features), dim=1)
+        
+        # 2. 视觉投影到语义嵌入空间并归一化
+        # features: [B, feat_dim, H, W] -> [B, embed_dim, H, W]
+        features = self.v_proj(features)
+        features = F.normalize(features, dim=1)
+        
         B, C, H_f, W_f = features.shape
-        # 3. 计算与近义词权重矩阵的相似度 logits
-        # features: [B, C, H, W] -> [B*H*W, C]
-        # weights: [C, num_classes]
-        logits = (features.permute(0, 2, 3, 1).reshape(-1, C) @ self.zeroshot_weights) / self.temperature
+        
+        # 3. 计算与文本权重的相似度
+        # 将特征展平进行矩阵乘法: [B*H*W, C] @ [C, num_classes]
+        flat_features = features.permute(0, 2, 3, 1).reshape(-1, C)
+        logits = (flat_features @ self.zeroshot_weights) / self.temperature
+        
         # 4. 还原形状为 [B, num_classes, H, W]
         return logits.reshape(B, H_f, W_f, -1).permute(0, 3, 1, 2)
