@@ -56,7 +56,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     parser.add_argument('--device', type=str, default=default_device)
-    parser.add_argument('--filename', type=str, default='img.jpg')
+    parser.add_argument('--filename', type=str, default='img3.jpg')
     parser.add_argument('--window_size', type=int, default=224, help='CLIP 窗口大小')
     parser.add_argument('--stride', type=int, default=112, help='步长，推荐窗口的一半实现重叠')
     return parser.parse_args()
@@ -68,8 +68,8 @@ def main():
     stride = args.stride
 
     # 类别定义与配色
-    classnames = ['background', 'bareland,barren', 'pavement', 'road',
-             'tree,forest', 'water,river','grass', 'cropland,field', 'building,roof,house']
+    classnames = ['background', 'bareland,barren', 'pavement', 'road','water,river',
+             'tree,forest', 'grass', 'cropland,field', 'building,roof,house']
     custom_palette = [
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
