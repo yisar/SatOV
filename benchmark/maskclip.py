@@ -1,20 +1,21 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Tuple
+from typing import List
 from torch import Tensor
 from open_clip import get_tokenizer, create_model_from_pretrained
 import torchvision.transforms as T
 from PIL import Image
 import numpy as np
-from functools import partial
 
-# ============================
-# 1. PAMR 优化模块（直接加入）
-# ============================
+# --------------------------
+# PAMR 模块（直接集成）
+# Copyright 2020 TU Darmstadt
+# Licnese: Apache 2.0 License.
+# --------------------------
 class LocalAffinity(nn.Module):
     def __init__(self, dilations=[1]):
-        super().__init__()
+        super(LocalAffinity, self).__init__()
         self.dilations = dilations
         weight = self._init_aff()
         self.register_buffer('kernel', weight)
@@ -36,11 +37,12 @@ class LocalAffinity(nn.Module):
 
     def forward(self, x):
         self.weight_check = self.weight_check.type_as(x)
+        assert torch.all(self.weight_check.eq(self.kernel))
         B, K, H, W = x.size()
-        x = x.view(B * K, 1, H, W)
+        x = x.view(B*K, 1, H, W)
         x_affs = []
         for d in self.dilations:
-            x_pad = F.pad(x, [d] * 4, mode='replicate')
+            x_pad = F.pad(x, [d]*4, mode='replicate')
             x_aff = F.conv2d(x_pad, self.kernel, dilation=d)
             x_affs.append(x_aff)
         x_aff = torch.cat(x_affs, 1)
@@ -76,17 +78,17 @@ class LocalStDev(LocalAffinity):
         return weight
 
     def forward(self, x):
-        x = super().forward(x)
+        x = super(LocalStDev, self).forward(x)
         return x.std(2, keepdim=True)
 
 class LocalAffinityAbs(LocalAffinity):
     def forward(self, x):
-        x = super().forward(x)
+        x = super(LocalAffinityAbs, self).forward(x)
         return torch.abs(x)
 
 class PAMR(nn.Module):
-    def __init__(self, num_iter=3, dilations=[1,2]):  # 迭代3次效果最好
-        super().__init__()
+    def __init__(self, num_iter=3, dilations=[1,2]):  # 迭代次数3，效果最佳
+        super(PAMR, self).__init__()
         self.num_iter = num_iter
         self.aff_x = LocalAffinityAbs(dilations)
         self.aff_m = LocalAffinityCopy(dilations)
@@ -100,82 +102,107 @@ class PAMR(nn.Module):
         x = -self.aff_x(x) / (1e-8 + 0.1 * x_std)
         x = x.mean(1, keepdim=True)
         x = F.softmax(x, 2)
-
         for _ in range(self.num_iter):
             m = self.aff_m(mask)
             mask = (m * x).sum(2)
         return mask
 
-# ============================
-# 2. 你原来的 MaskClip 代码
-# ============================
-imagenet_templates = [
+# --- 1. 基础配置 ---
+IMAGENET_TEMPLATES = [
     'a photo of a {}.',
-    'a bad photo of a {}.',
     'a segmentation of a {}.',
-    'a photo of many {}.',
     'the {} in the scene.',
     'a close-up photo of a {}.',
 ]
-OPENAI_NORMALIZE = T.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 
+OPENAI_NORMALIZE = T.Normalize(
+    (0.48145466, 0.4578275, 0.40821073),
+    (0.26862954, 0.26130258, 0.27577711)
+)
+
+# --- 2. MaskClip 核心类（集成PAMR）---
 class MaskClip(nn.Module):
-    def __init__(self, clip_model="ViT-B-16", pretrained="laion2b_s34b_b88k", patch_size=16, img_size=(224, 224), in_channels=768, text_channels=512):
-        super().__init__()
+    def __init__(
+            self,
+            clip_model="ViT-B-16",
+            pretrained="laion2b_s34b_b88k",
+            patch_size=16,
+            img_size=(224, 224)
+        ):
+        super(MaskClip, self).__init__()
         self.patch_size = patch_size
         self.img_size = img_size
+        
+        print(f"🚀 加载骨干网络: {clip_model}...")
         model, _ = create_model_from_pretrained(clip_model, pretrained=pretrained)
         model.eval()
-        self.clip_T = OPENAI_NORMALIZE
+        
         self.hook_features = {}
         self.backbone = model
+        
+        # 注册 Hook
         def hook_fn_forward(module, input, output):
             self.hook_features["v"] = output
         self.backbone.visual.transformer.resblocks[-2].register_forward_hook(hook_fn_forward)
+        
         self._positional_embd = nn.Parameter(self.backbone.visual.positional_embedding.data.clone())
-        self.proj = nn.Conv2d(in_channels, text_channels, 1, bias=False)
-        self.proj.weight = nn.Parameter(model.visual.proj.t()[:, :, None, None])
+        
+        # 投影层
+        v_proj = self.backbone.visual.proj 
+        in_channels, text_channels = v_proj.shape
+        self.maskclip_proj = nn.Conv2d(in_channels, text_channels, 1, bias=False)
+        with torch.no_grad():
+            self.maskclip_proj.weight.copy_(v_proj.t().unsqueeze(-1).unsqueeze(-1))
+        
+        print("✅ 投影权重转换成功。")
         self.tokenizer = get_tokenizer(clip_model)
+        
+        # ========== 新增：初始化PAMR后处理模块 ==========
+        self.pamr = PAMR(num_iter=3, dilations=[1,2])
 
     @torch.no_grad()
     def extract_feat(self, inputs: Tensor) -> Tensor:
         pos_embed = self.backbone.visual.positional_embedding
         B, C, H, W = inputs.shape
         hw_shape = (H // self.patch_size, W // self.patch_size)
-        x_len, pos_len = hw_shape[0] * hw_shape[1], pos_embed.shape[0]
+        x_len, pos_len = hw_shape[0]*hw_shape[1], pos_embed.shape[0]
+
         if x_len != pos_len - 1:
             pos_h = self.img_size[0] // self.patch_size
             pos_w = self.img_size[1] // self.patch_size
             self.backbone.visual.positional_embedding.data = self.resize_pos_embed(
                 self._positional_embd[None], hw_shape, (pos_h, pos_w), 'bicubic')[0]
+
         _ = self.backbone(inputs)
         v = self.hook_features["v"]
+        
         v = self.extract_v(v, self.backbone.visual.transformer.resblocks[-1]).permute(1, 0, 2)
         v = self.backbone.visual.ln_post(v)
-        v = v.permute(1, 0, 2)[:, 1:]
+        v = v.permute(1, 0, 2)[:, 1:] 
         v = v.reshape(B, hw_shape[0], hw_shape[1], -1).permute(0, 3, 1, 2).contiguous()
+
         self.backbone.visual.positional_embedding.data = self._positional_embd
         return v
 
     @torch.no_grad()
     def extract_v(self, x, block):
         y = block.ln_1(x)
-        y = F.linear(y, block.attn.in_proj_weight, block.attn.in_proj_bias)
-        B, N, C = y.shape
-        y = y.view(B, N, 3, C // 3).permute(2, 0, 1, 3).reshape(3 * B, N, C // 3)
-        y = F.linear(y, block.attn.out_proj.weight, block.attn.out_proj.bias)
-        q, k, v = y.tensor_split(3, dim=0)
-        v += x
-        v += block.mlp(block.ln_2(v))
+        qkv = F.linear(y, block.attn.in_proj_weight, block.attn.in_proj_bias)
+        B, N, C = qkv.shape
+        qkv = qkv.view(B, N, 3, C // 3).permute(2, 0, 1, 3).reshape(3 * B, N, C // 3)
+        q, k, v = qkv.tensor_split(3, dim=0)
+        v = F.linear(v, block.attn.out_proj.weight, block.attn.out_proj.bias)
+        v = v + x
+        v = v + block.mlp(block.ln_2(v))
         return v
 
     @staticmethod
-    def resize_pos_embed(pos_embed, input_shpae, pos_shape, mode):
+    def resize_pos_embed(pos_embed, input_shape, pos_shape, mode):
         pos_h, pos_w = pos_shape
         cls_token_weight = pos_embed[:, 0]
         pos_embed_weight = pos_embed[:, 1:]
         pos_embed_weight = pos_embed_weight.reshape(1, pos_h, pos_w, pos_embed.shape[2]).permute(0, 3, 1, 2)
-        pos_embed_weight = F.interpolate(pos_embed_weight, size=input_shpae, align_corners=False, mode=mode)
+        pos_embed_weight = F.interpolate(pos_embed_weight, size=input_shape, align_corners=False, mode=mode)
         cls_token_weight = cls_token_weight.unsqueeze(1)
         pos_embed_weight = torch.flatten(pos_embed_weight, 2).transpose(1, 2)
         return torch.cat((cls_token_weight, pos_embed_weight), dim=1)
@@ -187,73 +214,68 @@ class MaskClip(nn.Module):
         return F.normalize(aug_embeddings, dim=-1)
 
     def _embed_label(self, label: str, device) -> Tensor:
-        all_prompts = self.tokenizer([template.format(label) for template in imagenet_templates]).to(device)
+        all_prompts = self.tokenizer([template.format(label) for template in IMAGENET_TEMPLATES]).to(device)
         out = self.backbone.encode_text(all_prompts)
         out = F.normalize(out, dim=-1)
         return out.mean(dim=0)
 
     @torch.no_grad()
     def forward(self, inputs: Tensor) -> Tensor:
-        inputs = self.clip_T(inputs)
-        x = self.extract_feat(inputs)
-        feats = self.proj(x)
-        return feats
+        # 原始图像特征
+        img_feat = self.extract_feat(inputs)
+        # 投影后的特征
+        feats = self.maskclip_proj(img_feat)
+        feats = F.normalize(feats, dim=1)
+        return img_feat, feats  # 返回原始特征+投影特征，用于PAMR
 
-# ============================
-# 3. 推理函数（已集成 PAMR）
-# ============================
-def run_inference(image_path, labels, save_path="segmentation_result.png"):
-    custom_palette = [
+# --- 3. 推理逻辑（新增PAMR优化）---
+def run_inference(image_path, labels, save_path="maskclip_result.png"):
+    custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
-    ]
+    ], dtype=np.uint8)
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
-    # 模型
     model = MaskClip().to(device).eval()
-    pamr = PAMR(num_iter=3, dilations=[1,2]).to(device).eval()  # PAMR初始化
 
-    # 图像
+    # 图像预处理
     raw_img = Image.open(image_path).convert('RGB')
-    input_size = (448, 448)
-    transform = T.Compose([T.Resize(input_size), T.ToTensor()])
+    w, h = raw_img.size
+    
+    transform = T.Compose([
+        T.Resize((448, 448)),
+        T.ToTensor(),
+        OPENAI_NORMALIZE,
+    ])
     img_tensor = transform(raw_img).unsqueeze(0).to(device)
 
     # 1. 提取特征
-    img_feats = model(img_tensor)
-    img_feats = F.normalize(img_feats, dim=1)
-    text_feats = model.get_classifier(labels)
+    img_feat, img_feats = model(img_tensor)
+    text_classifier = model.get_classifier(labels)
+    
+    # 2. 计算相似度
+    similarity = torch.einsum('bchw,kc->bkhw', img_feats, text_classifier)
+    
+    # ========== 核心新增：PAMR 掩码优化 ==========
+    similarity = model.pamr(img_feat, similarity)
+    
+    # 3. 上采样+生成掩码
+    similarity = F.interpolate(similarity, size=(h, w), mode='bilinear', align_corners=False)
+    mask_idx = similarity.argmax(dim=1).squeeze().cpu().numpy()
 
-    # 2. 相似度图
-    similarity = torch.einsum('bchw,kc->bkhw', img_feats, text_feats)
-    similarity = F.interpolate(similarity, size=raw_img.size[::-1], mode='bilinear')
-
-    # ======================
-    # ✨ 核心：PAMR 优化
-    # ======================
-    with torch.no_grad():
-        refined_similarity = pamr(img_tensor, similarity)  # 用原图引导优化分割图
-
-    # 生成掩码
-    mask = refined_similarity.argmax(1).squeeze().cpu().numpy()
-
-    # 上色
-    h, w = mask.shape
-    color_mask = np.zeros((h, w, 3), dtype=np.uint8)
-    for idx, color in enumerate(custom_palette):
-        color_mask[mask == idx] = color
-
+    # 生成彩色掩码
+    color_mask = custom_palette[mask_idx % len(custom_palette)]
     seg_img = Image.fromarray(color_mask)
     seg_img.save(save_path)
-    print(f"✅ 优化完成！结果已保存至：{save_path}")
+    print(f"✨ 带PAMR优化的分割图已保存至: {save_path}")
 
-# ============================
-# 执行
-# ============================
+# --- 4. 执行入口 ---
 if __name__ == "__main__":
     target_labels = [
-        'background', 'bareland', 'pavement', 'road','water',
+        'background', 'bareland', 'pavement', 'road', 'water',
         'tree', 'grass', 'cropland', 'building'
     ]
-    run_inference("img2.jpg", target_labels, save_path="maskclip_pamr.png")
+    try:
+        run_inference("img3.jpg", target_labels)
+    except FileNotFoundError:
+        print("❌ 找不到图片，请检查 img2.jpg 是否在当前目录下。")
