@@ -8,105 +8,6 @@ import torchvision.transforms as T
 from PIL import Image
 import numpy as np
 
-# --------------------------
-# PAMR 模块（直接集成）
-# Copyright 2020 TU Darmstadt
-# Licnese: Apache 2.0 License.
-# --------------------------
-class LocalAffinity(nn.Module):
-    def __init__(self, dilations=[1]):
-        super(LocalAffinity, self).__init__()
-        self.dilations = dilations
-        weight = self._init_aff()
-        self.register_buffer('kernel', weight)
-
-    def _init_aff(self):
-        weight = torch.zeros(8, 1, 3, 3)
-        for i in range(weight.size(0)):
-            weight[i, 0, 1, 1] = 1
-        weight[0, 0, 0, 0] = -1
-        weight[1, 0, 0, 1] = -1
-        weight[2, 0, 0, 2] = -1
-        weight[3, 0, 1, 0] = -1
-        weight[4, 0, 1, 2] = -1
-        weight[5, 0, 2, 0] = -1
-        weight[6, 0, 2, 1] = -1
-        weight[7, 0, 2, 2] = -1
-        self.weight_check = weight.clone()
-        return weight
-
-    def forward(self, x):
-        self.weight_check = self.weight_check.type_as(x)
-        assert torch.all(self.weight_check.eq(self.kernel))
-        B, K, H, W = x.size()
-        x = x.view(B*K, 1, H, W)
-        x_affs = []
-        for d in self.dilations:
-            x_pad = F.pad(x, [d]*4, mode='replicate')
-            x_aff = F.conv2d(x_pad, self.kernel, dilation=d)
-            x_affs.append(x_aff)
-        x_aff = torch.cat(x_affs, 1)
-        return x_aff.view(B, K, -1, H, W)
-
-class LocalAffinityCopy(LocalAffinity):
-    def _init_aff(self):
-        weight = torch.zeros(8, 1, 3, 3)
-        weight[0, 0, 0, 0] = 1
-        weight[1, 0, 0, 1] = 1
-        weight[2, 0, 0, 2] = 1
-        weight[3, 0, 1, 0] = 1
-        weight[4, 0, 1, 2] = 1
-        weight[5, 0, 2, 0] = 1
-        weight[6, 0, 2, 1] = 1
-        weight[7, 0, 2, 2] = 1
-        self.weight_check = weight.clone()
-        return weight
-
-class LocalStDev(LocalAffinity):
-    def _init_aff(self):
-        weight = torch.zeros(9, 1, 3, 3)
-        weight[0, 0, 0, 0] = 1
-        weight[1, 0, 0, 1] = 1
-        weight[2, 0, 0, 2] = 1
-        weight[3, 0, 1, 0] = 1
-        weight[4, 0, 1, 1] = 1
-        weight[5, 0, 1, 2] = 1
-        weight[6, 0, 2, 0] = 1
-        weight[7, 0, 2, 1] = 1
-        weight[8, 0, 2, 2] = 1
-        self.weight_check = weight.clone()
-        return weight
-
-    def forward(self, x):
-        x = super(LocalStDev, self).forward(x)
-        return x.std(2, keepdim=True)
-
-class LocalAffinityAbs(LocalAffinity):
-    def forward(self, x):
-        x = super(LocalAffinityAbs, self).forward(x)
-        return torch.abs(x)
-
-class PAMR(nn.Module):
-    def __init__(self, num_iter=3, dilations=[1,2]):  # 迭代次数3，效果最佳
-        super(PAMR, self).__init__()
-        self.num_iter = num_iter
-        self.aff_x = LocalAffinityAbs(dilations)
-        self.aff_m = LocalAffinityCopy(dilations)
-        self.aff_std = LocalStDev(dilations)
-
-    def forward(self, x, mask):
-        mask = F.interpolate(mask, size=x.size()[-2:], mode="bilinear", align_corners=True)
-        B, K, H, W = x.size()
-        _, C, _, _ = mask.size()
-        x_std = self.aff_std(x)
-        x = -self.aff_x(x) / (1e-8 + 0.1 * x_std)
-        x = x.mean(1, keepdim=True)
-        x = F.softmax(x, 2)
-        for _ in range(self.num_iter):
-            m = self.aff_m(mask)
-            mask = (m * x).sum(2)
-        return mask
-
 # --- 1. 基础配置 ---
 IMAGENET_TEMPLATES = [
     'a photo of a {}.',
@@ -120,7 +21,7 @@ OPENAI_NORMALIZE = T.Normalize(
     (0.26862954, 0.26130258, 0.27577711)
 )
 
-# --- 2. MaskClip 核心类（集成PAMR）---
+# --- 2. MaskClip 核心类（集成）---
 class MaskClip(nn.Module):
     def __init__(
             self,
@@ -156,9 +57,7 @@ class MaskClip(nn.Module):
         
         print("✅ 投影权重转换成功。")
         self.tokenizer = get_tokenizer(clip_model)
-        
-        # ========== 新增：初始化PAMR后处理模块 ==========
-        self.pamr = PAMR(num_iter=3, dilations=[1,2])
+
 
     @torch.no_grad()
     def extract_feat(self, inputs: Tensor) -> Tensor:
@@ -226,9 +125,8 @@ class MaskClip(nn.Module):
         # 投影后的特征
         feats = self.maskclip_proj(img_feat)
         feats = F.normalize(feats, dim=1)
-        return img_feat, feats  # 返回原始特征+投影特征，用于PAMR
+        return img_feat, feats  # 返回原始特征+投影特征，用于
 
-# --- 3. 推理逻辑（新增PAMR优化）---
 def run_inference(image_path, labels, save_path="./img2/maskclip.png"):
     custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
@@ -255,9 +153,7 @@ def run_inference(image_path, labels, save_path="./img2/maskclip.png"):
     
     # 2. 计算相似度
     similarity = torch.einsum('bchw,kc->bkhw', img_feats, text_classifier)
-    
-    # ========== 核心新增：PAMR 掩码优化 ==========
-    similarity = model.pamr(img_feat, similarity)
+
     
     # 3. 上采样+生成掩码
     similarity = F.interpolate(similarity, size=(h, w), mode='bilinear', align_corners=False)
@@ -267,7 +163,7 @@ def run_inference(image_path, labels, save_path="./img2/maskclip.png"):
     color_mask = custom_palette[mask_idx % len(custom_palette)]
     seg_img = Image.fromarray(color_mask)
     seg_img.save(save_path)
-    print(f"✨ 带PAMR优化的分割图已保存至: {save_path}")
+    print(f"✨ 带优化的分割图已保存至: {save_path}")
 
 # --- 4. 执行入口 ---
 if __name__ == "__main__":

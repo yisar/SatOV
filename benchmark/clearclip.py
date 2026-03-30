@@ -94,7 +94,7 @@ class DenseClip(nn.Module):
         self.embed_dim = model.text_projection.shape[1] if hasattr(model, 'text_projection') else self.feat_dim
 
         # 增加 dilation 范围以适应高分辨率引导
-        self.pamr = PAMR(num_iter=1, dilations=[1, 2, 4, 8]).to(self.device)
+        self.pamr = PAMR(num_iter=20, dilations=[1, 2, 4, 8]).to(self.device)
 
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
         if hasattr(self.visual, 'proj') and self.visual.proj is not None:
@@ -175,7 +175,7 @@ def run_inference(image_path, labels, palette, output_path="clearclip_final.png"
     orig_w, orig_h = img_raw.size
     
     # 稍微增大处理分辨率以获得更精细的 PAMR 结果
-    target_w = 448 
+    target_w = 640 
     ratio = target_w / orig_w
     target_h = int(orig_h * ratio)
     new_w = (target_w // 16) * 16
