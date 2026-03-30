@@ -7,15 +7,16 @@ import numpy as np
 from typing import Union, List
 
 # ===================== 固定配置 =====================
+# 去除 'background'，变为 8 分类
 TARGET_LABELS = [
-    'background', 'bareland', 'pavement', 'road', 'water',
+    'bareland', 'pavement', 'road', 'water',
     'tree', 'grass', 'cropland', 'building'
 ]
 
+# 对应删除第一个背景颜色 (68, 1, 84)，保持与标签数量一致
 CUSTOM_PALETTE = [
-    (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
-    (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57),
-    (253, 231, 37)
+    (72, 40, 120), (62, 74, 137), (49, 104, 142), (38, 130, 142), 
+    (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
 ]
 
 _TEMPLATES = ['a satellite photo of a {}.']
@@ -169,13 +170,14 @@ class DenseClipPAMR(nn.Module):
         logits = logits.permute(0, 3, 1, 2)
 
         # 3. PAMR 细化
-        # 使用缩放后的 img_tensor 尺寸作为引导图
         guide_img = F.interpolate(img_tensor, size=(new_h, new_w), mode='bilinear', align_corners=False)
         refined_mask = self.pamr(guide_img, logits)
         
         # 4. 后处理与尺寸还原
         pred_mask = refined_mask.argmax(dim=1).squeeze(0).cpu().numpy()
         color_output = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        
+        # 因为变成了8分类，这里的映射自动对应去除了背景后的颜色列表
         for idx, color in enumerate(CUSTOM_PALETTE):
             color_output[pred_mask == idx] = color
             
@@ -194,8 +196,7 @@ if __name__ == "__main__":
     
     if os.path.exists(IMAGE_PATH):
         model = DenseClipPAMR()
-        print(f"正在处理: {IMAGE_PATH} (限制宽度: 512)...")
-        # 如果显存依然不够，可以尝试将 max_width 设为 448 或更小
+        print(f"正在处理: {IMAGE_PATH} (去除背景类别，限制宽度: 800)...")
         result = model(IMAGE_PATH, max_width=800)
         result.save(OUT_PATH)
         print(f"完成！结果已保存至: {OUT_PATH}")
