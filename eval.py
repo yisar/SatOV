@@ -4,18 +4,43 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.cluster import adjusted_rand_score
 
 
+# ===============================
+# 1️⃣ 自动读取 mask（支持灰度 / RGB）
+# ===============================
 def load_mask(path):
-    """
-    读取分割mask图片 → numpy数组
-    """
     img = Image.open(path)
 
-    # 转成单通道（非常关键！）
-    img = img.convert("L")
+    # RGB 彩色分割图
+    if img.mode == "RGB":
+        return rgb_to_label(img)
+    else:
+        # 灰度图直接当 label
+        return np.array(img)
 
-    return np.array(img)
+
+# ===============================
+# 2️⃣ RGB → label（关键）
+# ===============================
+def rgb_to_label(img):
+    img = np.array(img)
+
+    h, w, _ = img.shape
+    label = np.zeros((h, w), dtype=np.int32)
+
+    # 找所有颜色
+    colors = np.unique(img.reshape(-1, 3), axis=0)
+
+    # 颜色 → 类别ID
+    for idx, color in enumerate(colors):
+        mask = np.all(img == color, axis=-1)
+        label[mask] = idx
+
+    return label
 
 
+# ===============================
+# 3️⃣ IoU matrix
+# ===============================
 def compute_iou_matrix(pred, gt):
     pred = pred.flatten()
     gt = gt.flatten()
@@ -39,6 +64,9 @@ def compute_iou_matrix(pred, gt):
     return iou_matrix
 
 
+# ===============================
+# 4️⃣ Hungarian mIoU
+# ===============================
 def hungarian_miou(pred, gt):
     iou_matrix = compute_iou_matrix(pred, gt)
 
@@ -51,10 +79,16 @@ def hungarian_miou(pred, gt):
     return iou_matrix[row_ind, col_ind].mean()
 
 
+# ===============================
+# 5️⃣ ARI
+# ===============================
 def compute_ari(pred, gt):
     return adjusted_rand_score(gt.flatten(), pred.flatten())
 
 
+# ===============================
+# 6️⃣ 总评测
+# ===============================
 def evaluate_segmentation(pred, gt, alpha=0.5):
     miou = hungarian_miou(pred, gt)
     ari = compute_ari(pred, gt)
@@ -66,13 +100,20 @@ def evaluate_segmentation(pred, gt, alpha=0.5):
     }
 
 
-# ====== 这里是关键：输入图片路径 ======
-
+# ===============================
+# 7️⃣ 主程序（输入图片路径）
+# ===============================
 pred_path = "pred.png"
 gt_path = "gt.png"
 
 pred = load_mask(pred_path)
 gt = load_mask(gt_path)
+
+# 🔥 你要加的 debug（已加入）
+print("pred unique:", np.unique(pred))
+print("gt unique:", np.unique(gt))
+print("颜色数量（pred）:", len(np.unique(pred)))
+print("颜色数量（gt）:", len(np.unique(gt)))
 
 result = evaluate_segmentation(pred, gt)
 
