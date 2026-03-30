@@ -134,6 +134,9 @@ def main():
 
         # 4. 渲染不透明掩码 (alpha=1.0)
         seg_result = draw_segmentation_masks(img_tensor, masks, colors=custom_palette, alpha=1.0)
+        save_path = f'img2/{args.filename}'
+        seg_result_pil = TF.to_pil_image(seg_result)
+        seg_result_pil.save(save_path)
         
         # 5. 可视化
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
