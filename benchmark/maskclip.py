@@ -229,7 +229,7 @@ class MaskClip(nn.Module):
         return img_feat, feats  # 返回原始特征+投影特征，用于PAMR
 
 # --- 3. 推理逻辑（新增PAMR优化）---
-def run_inference(image_path, labels, save_path="maskclip_result.png"):
+def run_inference(image_path, labels, save_path="./img2/maskclip.png"):
     custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
