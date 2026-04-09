@@ -56,7 +56,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     parser.add_argument('--device', type=str, default=default_device)
-    parser.add_argument('--filename', type=str, default='dataset/SSSI/6411.jpg')
+    parser.add_argument('--filename', type=str, default='dataset/Vaihingen/top_mosaic_09cm_area2_85.png')
     parser.add_argument('--window_size', type=int, default=224, help='CLIP 窗口大小')
     parser.add_argument('--stride', type=int, default=112, help='步长，推荐窗口的一半实现重叠')
     return parser.parse_args()
