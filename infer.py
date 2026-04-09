@@ -56,7 +56,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     parser.add_argument('--device', type=str, default=default_device)
-    parser.add_argument('--filename', type=str, default='p2798.png')
+    parser.add_argument('--filename', type=str, default='dataset/SSSI/6411.jpg')
     parser.add_argument('--window_size', type=int, default=224, help='CLIP 窗口大小')
     parser.add_argument('--stride', type=int, default=112, help='步长，推荐窗口的一半实现重叠')
     return parser.parse_args()
@@ -135,9 +135,9 @@ def main():
 
         # 4. 渲染不透明掩码 (alpha=1.0)
         seg_result = draw_segmentation_masks(img_tensor, masks, colors=custom_palette, alpha=1.0)
-        save_path = f'img2/{args.filename}'
+        save_path = f'{args.filename}'
         seg_result_pil = TF.to_pil_image(seg_result)
-        seg_result_pil.save(save_path)
+        seg_result_pil.save(save_path.replace('dataset','res'))
         
         # 5. 可视化
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
@@ -154,9 +154,9 @@ def main():
         fig.legend(handles=patches, loc='center right', title="Land Cover Classes")
         plt.subplots_adjust(right=0.88)
         
-        save_path = f'final_crf_result_{args.filename}'
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        # save_path = f'{args.filename}'
+        # plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        # plt.show()
         
         print(f">>> 处理完成！高清结果已保存至: {save_path}")
 
