@@ -170,6 +170,13 @@ class DenseClip(nn.Module):
             
         return up_features
 
+    @torch.no_grad()
+    def get_features(self, x, hr_guide):
+        """返回 CLIP 稠密特征（用于 GLA 的 Q/K/V）"""
+        features = self._stem(x.to(self.device), hr_guide.to(self.device))
+        features = self.v_proj(features)
+        return F.normalize(features, dim=1)
+
     def forward(self, images, hr_guide: Optional[torch.Tensor] = None):
         """
         输入: images [B, 3, H, W]

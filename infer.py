@@ -56,7 +56,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     parser.add_argument('--device', type=str, default=default_device)
-    parser.add_argument('--filename', type=str, default='img3.jpg')
+    parser.add_argument('--filename', type=str, default='p2798.png')
     parser.add_argument('--window_size', type=int, default=224, help='CLIP 窗口大小')
     parser.add_argument('--stride', type=int, default=112, help='步长，推荐窗口的一半实现重叠')
     return parser.parse_args()
@@ -99,6 +99,7 @@ def main():
         print(f">>> 开始滑动窗口推理: {len(y_steps)}x{len(x_steps)} 个切片")
         for y in y_steps:
             for x in x_steps:
+                print(x,y)
                 crop = raw_image.crop((x, y, x + win, y + win))
                 
                 # 预处理
