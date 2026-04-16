@@ -85,6 +85,6 @@ if __name__ == "__main__":
     
     # 请确保 img2.jpg 在当前目录下
     try:
-        run_inference("img3.jpg", target_labels, save_path="./img2/clipseg_final.png")
+        run_inference("../dataset/DDOA/P1435.png", target_labels, save_path="./benchmark/DDOA/clipseg/P1435.png")
     except Exception as e:
         print(f"错误: {e}. 请确保已安装 transformers 库并能访问 Hugging Face 权重。")

@@ -11,11 +11,6 @@ import time
 def UPA(HR_img, lr_modality):
     """
     Grid-based 快速联合双边上采样 (修复梯度传递版)
-    修复点：
-    1. 处理 CUDA 张量转 numpy 的错误
-    2. 增加数据类型和设备的鲁棒性检查
-    3. 统一设备管理，避免混合 CPU/CUDA 张量
-    4. 修复 torch.amp.autocast 设备类型参数错误（字符串 vs torch.device）
     """
     with torch.enable_grad():
         start_time = time.time()
