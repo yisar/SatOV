@@ -119,7 +119,7 @@ class UPA_FBS_JointModel(nn.Module):
 
 # --- 4. 启动函数 ---
 
-def UPA_Joint_FBS(HR_img, lr_modality):
+def UPA(HR_img, lr_modality):
     """
     联合 UPA-FBS 优化器
     """

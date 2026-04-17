@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from upa import UPA
+from upa_fbs import UPA
 
 # 尝试加载 ROOT 路径与外部模块
 try:
@@ -40,14 +40,14 @@ class DenseClip(nn.Module):
         
         # 3. 加载 AnyUp / UPA 引导上采样模块
         print(f"正在加载上采样模块...")
-        try:
-            self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
-        except Exception as e:
-            print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
-            self.any_up = None
+        # try:
+        #     self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
+        # except Exception as e:
+        #     print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
+        #     self.any_up = None
         
         # 这里的 UPA 假设是一个 nn.Module 类
-        self.upa = None # 如果有具体的 UPA 实现类，请在此初始化
+        self.upa = UPA # 如果有具体的 UPA 实现类，请在此初始化
 
         # 4. 初始化视觉投影 (例如 768 -> 512)
         # 将 CLIP 原生的视觉投影权重迁移到 Conv2d(1x1) 中，方便处理特征图
