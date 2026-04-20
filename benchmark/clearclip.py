@@ -221,4 +221,4 @@ custom_palette = np.array([
 
 if __name__ == "__main__":
     # 确保 img3.jpg 存在
-    run_inference("./dataset/DDOA/P2120.png", target_labels, custom_palette, "./benchmark/DDOA/clearclip/P2120.png")
+    run_inference("./dataset/DDOA/P2798.png", target_labels, custom_palette, "./benchmark/DDOA/clearclip/P1798.png")
