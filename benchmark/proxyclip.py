@@ -21,14 +21,14 @@ OPENAI_NORMALIZE = T.Normalize(
     (0.26862954, 0.26130258, 0.27577711)
 )
 
-# --- 2. 增强型 MaskClip (集成 DINO 平滑) ---
+# --- 2. 增强型 MaskClip (集成 DINO 空间代理) ---
 class MaskClip(nn.Module):
     def __init__(
             self,
             clip_model="ViT-B-16",
             pretrained="laion2b_s34b_b88k",
             patch_size=16,
-            img_size=(448, 448)  # 提高默认分辨率，推荐为 14 和 16 的公倍数
+            img_size=(448, 448)
         ):
         super(MaskClip, self).__init__()
         self.patch_size = patch_size
@@ -45,7 +45,6 @@ class MaskClip(nn.Module):
         self.hook_features = {}
         def hook_fn_forward(module, input, output):
             self.hook_features["v"] = output
-        # 挂载在倒数第二层，提取更丰富的局部特征
         self.backbone.visual.transformer.resblocks[-2].register_forward_hook(hook_fn_forward)
         
         self._positional_embd = nn.Parameter(self.backbone.visual.positional_embedding.data.clone())
@@ -61,17 +60,13 @@ class MaskClip(nn.Module):
     @torch.no_grad()
     def extract_feat(self, inputs: Tensor):
         B, C, H, W = inputs.shape
-        hw_shape = (H // self.patch_size, W // self.patch_size) # 目标形状，例如 (28, 28)
+        hw_shape = (H // self.patch_size, W // self.patch_size)
         
-        # 1. 动态调整 CLIP 位置编码
         pos_embed = self.backbone.visual.positional_embedding
         if (hw_shape[0] * hw_shape[1]) != (self._positional_embd.shape[0] - 1):
-            # 自动计算原始位置编码的 grid 大小 (通常是 14x14)
             orig_num_patches = self._positional_embd.shape[0] - 1
             orig_h = int(orig_num_patches ** 0.5)
             orig_w = orig_num_patches // orig_h
-            
-            # 传入原始形状和目标形状进行插值
             self.backbone.visual.positional_embedding.data = self.resize_pos_embed(
                 self._positional_embd[None], target_shape=hw_shape, orig_shape=(orig_h, orig_w), mode='bicubic'
             )[0]
@@ -83,12 +78,10 @@ class MaskClip(nn.Module):
         v = v.permute(1, 0, 2)[:, 1:] 
         clip_feat = v.reshape(B, hw_shape[0], hw_shape[1], -1).permute(0, 3, 1, 2).contiguous()
 
-        # 2. 提取 DINO 特征 (DINOv2 patch size 是 14)
         dino_out = self.dino.get_intermediate_layers(inputs, n=1)[0]
         dh, dw = H // 14, W // 14
         dino_feat = dino_out.reshape(B, dh, dw, -1).permute(0, 3, 1, 2).contiguous()
 
-        # 恢复原始的位置编码，防止影响后续的其他尺寸推理
         self.backbone.visual.positional_embedding.data = self._positional_embd
         return clip_feat, dino_feat
 
@@ -109,13 +102,8 @@ class MaskClip(nn.Module):
         orig_h, orig_w = orig_shape
         cls_token_weight = pos_embed[:, 0]
         pos_embed_weight = pos_embed[:, 1:]
-        
-        # 修复点：用原本的形状 (例如 14x14) 来 reshape，而不是直接用目标形状
         pos_embed_weight = pos_embed_weight.reshape(1, orig_h, orig_w, pos_embed.shape[2]).permute(0, 3, 1, 2)
-        
-        # 插值放大到目标形状 (例如 28x28)
         pos_embed_weight = F.interpolate(pos_embed_weight, size=target_shape, align_corners=False, mode=mode)
-        
         cls_token_weight = cls_token_weight.unsqueeze(1)
         pos_embed_weight = torch.flatten(pos_embed_weight, 2).transpose(1, 2)
         return torch.cat((cls_token_weight, pos_embed_weight), dim=1)
@@ -139,15 +127,14 @@ class MaskClip(nn.Module):
         clip_proj = F.normalize(clip_proj, dim=1)
         return clip_proj, dino_feat
 
-# --- 3. 推理与 DINO 平滑逻辑 ---
-def run_inference(image_path, labels, save_path="./img2/maskclip_dino.png"):
+# --- 3. 推理逻辑 (Proxy 机制核心修改区) ---
+def run_inference(image_path, labels, save_path="./dataset/proxyclip_dino.png"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = MaskClip().to(device).eval()
 
     raw_img = Image.open(image_path).convert('RGB')
     orig_w, orig_h = raw_img.size
     
-    # 使用 448 确保能被 14 和 16 完美整除 (448/16=28, 448/14=32)
     input_res = 448
     transform = T.Compose([
         T.Resize((input_res, input_res)),
@@ -156,41 +143,39 @@ def run_inference(image_path, labels, save_path="./img2/maskclip_dino.png"):
     ])
     img_tensor = transform(raw_img).unsqueeze(0).to(device)
 
-    # 1. 提取 CLIP 和 DINO 特征
-    clip_feats, dino_feats = model(img_tensor)
+    # 1. 提取基础特征
+    clip_feats, dino_feats = model(img_tensor) # clip: [1, 512, 28, 28], dino: [1, 768, 32, 32]
     text_classifier = model.get_classifier(labels)
     
-    # 2. 计算 CLIP 原始语义相似度
-    # shape: [B, K, H_clip, W_clip] (1, num_classes, 28, 28)
-    similarity = torch.einsum('bchw,kc->bkhw', clip_feats, text_classifier)
+    # 2. 构建 DINO 空间代理 (Spatial Proxy)
+    # 将 CLIP 特征对齐到 DINO 的空间分辨率 (32x32)
+    B, C_clip, Hc, Wc = clip_feats.shape
+    _, C_dino, Hd, Wd = dino_feats.shape
+    clip_feats_resized = F.interpolate(clip_feats, size=(Hd, Wd), mode='bilinear', align_corners=False)
     
-    # 3. DINO 引导平滑 (核心改进区)
-    # a. 准备 DINO 特征并归一化 [1, C, H_d, W_d] (1, C, 32, 32)
-    dino_feats = F.normalize(dino_feats, dim=1)
-    B, C, Hd, Wd = dino_feats.shape
+    # 计算 DINO 自亲和矩阵作为“空间代理权重”
+    dino_norm = F.normalize(dino_feats, dim=1)
+    dino_flat = dino_norm.view(B, C_dino, -1) # [B, 768, 1024]
+    # Affinity: [B, 1024, 1024] -> 代表了像素间的空间结构关联
+    spatial_proxy_affinity = torch.bmm(dino_flat.transpose(1, 2), dino_flat)
+    spatial_proxy_affinity = F.softmax(spatial_proxy_affinity / 0.1, dim=-1)
     
-    # b. 计算 DINO 自亲和矩阵 (Self-Affinity Matrix)
-    dino_flat = dino_feats.view(B, C, -1) # [B, C, N], N = 32*32 = 1024
-    affinity = torch.bmm(dino_flat.transpose(1, 2), dino_flat) # [B, N, N]
+    # 3. Proxy 引导的特征重构 (Feature Refinement)
+    # 利用 DINO 的空间结构代理，重新分布 CLIP 的语义特征
+    clip_flat = clip_feats_resized.view(B, C_clip, -1) # [B, 512, 1024]
+    # 重构后的特征：每一个位置的语义都是由其在 DINO 空间下的“邻居”加权而来的
+    refined_clip_flat = torch.bmm(clip_flat, spatial_proxy_affinity.transpose(1, 2))
+    refined_clip_feats = refined_clip_flat.view(B, C_clip, Hd, Wd)
     
-    # 使用 Softmax 转化为平滑权重，温度系数 0.1 可以让边界更锐利
-    affinity = F.softmax(affinity / 0.1, dim=-1) 
-    
-    # c. 将 CLIP 相似度对齐到 DINO 分辨率，准备矩阵乘法
-    K = len(labels)
-    sim_resized = F.interpolate(similarity, size=(Hd, Wd), mode='bilinear', align_corners=False)
-    sim_flat = sim_resized.view(B, K, -1) # [B, K, N]
-    
-    # d. 传播：让 CLIP 的预测被 DINO 提取的物体边界和区域特征所引导
-    refined_sim = torch.bmm(sim_flat, affinity.transpose(1, 2))
-    similarity = refined_sim.view(B, K, Hd, Wd)
+    # 4. 计算最终语义相似度
+    # 使用重构后的、具有更好空间一致性的特征进行分类
+    similarity = torch.einsum('bchw,kc->bkhw', refined_clip_feats, text_classifier)
 
-    # 4. 上采样到原图大小并提取最大概率类别
+    # 5. 上采样到原图大小并提取类别
     similarity = F.interpolate(similarity, size=(orig_h, orig_w), mode='bilinear', align_corners=False)
     mask_idx = similarity.argmax(dim=1).squeeze().cpu().numpy()
 
-    # 5. 可视化映射
-    # 定义简单的调色板，根据类别数量循环使用
+    # 6. 可视化
     custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
@@ -198,7 +183,7 @@ def run_inference(image_path, labels, save_path="./img2/maskclip_dino.png"):
     
     color_mask = custom_palette[mask_idx % len(custom_palette)]
     Image.fromarray(color_mask).save(save_path)
-    print(f"✨ 真正的 DINO 引导平滑分割图已保存: {save_path}")
+    print(f"✨ 已通过 DINO 空间代理重构特征，结果已保存: {save_path}")
 
 if __name__ == "__main__":
     target_labels = ['background', 'bareland', 'pavement', 'road', 'water', 'tree', 'grass', 'cropland', 'building']
