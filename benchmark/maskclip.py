@@ -172,6 +172,6 @@ if __name__ == "__main__":
         'tree', 'grass', 'cropland', 'building'
     ]
     try:
-        run_inference("./dataset/DDOA/P2798.png", target_labels,"./benchmark/DDOA/maskclip/P2798.png")
+        run_inference("./dataset/UDD/DJI_0591.JPG", target_labels,"./benchmark/UDD/maskclip/DJI_0591.JPG")
     except FileNotFoundError:
         print("❌ 找不到图片，请检查 img2.jpg 是否在当前目录下。")
