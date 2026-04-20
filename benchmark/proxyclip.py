@@ -188,7 +188,7 @@ def run_inference(image_path, labels, save_path="./dataset/proxyclip_dino.png"):
 if __name__ == "__main__":
     target_labels = ['background', 'bareland', 'pavement', 'road', 'water', 'tree', 'grass', 'cropland', 'building']
     try:
-        run_inference("./dataset/SSSI/6930.jpg", target_labels,"./benchmark/SSSI/proxyclip/6930.jpg")
+        run_inference("./dataset/DDOA/P2798.png", target_labels,"./benchmark/DDOA/proxyclip/P2798.png")
     except Exception as e:
         import traceback
         traceback.print_exc()
