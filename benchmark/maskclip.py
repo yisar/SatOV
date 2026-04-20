@@ -127,7 +127,7 @@ class MaskClip(nn.Module):
         feats = F.normalize(feats, dim=1)
         return img_feat, feats  # 返回原始特征+投影特征，用于
 
-def run_inference(image_path, labels, save_path="./img2/maskclip.png"):
+def run_inference(image_path, labels, save_path):
     custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
@@ -172,6 +172,6 @@ if __name__ == "__main__":
         'tree', 'grass', 'cropland', 'building'
     ]
     try:
-        run_inference("img3.jpg", target_labels)
+        run_inference("./dataset/DDOA/P2798.png", target_labels,"./benchmark/DDOA/maskclip/P2798.png")
     except FileNotFoundError:
         print("❌ 找不到图片，请检查 img2.jpg 是否在当前目录下。")
