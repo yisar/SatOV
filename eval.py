@@ -41,22 +41,34 @@ def resize_pred_to_gt(pred, gt):
 
 
 # ===============================
-# 4️⃣ IoU matrix
+# 4️⃣ IoU matrix（✅ 已修复内存爆炸问题）
 # ===============================
 def compute_iou_matrix(pred, gt):
     pred = pred.ravel()
     gt = gt.ravel()
 
+    # 只计算有效区域
     mask = (pred >= 0) & (gt >= 0)
     pred = pred[mask]
     gt = gt[mask]
 
-    gt_ids, gt_inv = np.unique(gt, return_inverse=True)
-    pred_ids, pred_inv = np.unique(pred, return_inverse=True)
+    # ==============================================
+    # ✅ 关键修复：强制将标签映射为连续的 0,1,2...
+    # ==============================================
+    _, gt_inv = np.unique(gt, return_inverse=True)
+    _, pred_inv = np.unique(pred, return_inverse=True)
 
-    max_gt = len(gt_ids)
-    max_pred = len(pred_ids)
-    confusion = np.bincount(gt_inv * max_pred + pred_inv, minlength=max_gt * max_pred).reshape(max_gt, max_pred)
+    max_gt = int(gt_inv.max()) + 1 if len(gt_inv) > 0 else 0
+    max_pred = int(pred_inv.max()) + 1 if len(pred_inv) > 0 else 0
+
+    if max_gt == 0 or max_pred == 0:
+        return np.array([[0.0]])
+
+    # 现在绝对不会出现超大数组了
+    confusion = np.bincount(
+        gt_inv * max_pred + pred_inv,
+        minlength=max_gt * max_pred
+    ).reshape(max_gt, max_pred)
 
     gt_sum = confusion.sum(axis=1, keepdims=True)
     pred_sum = confusion.sum(axis=0, keepdims=True)
@@ -79,7 +91,7 @@ def hungarian_miou(pred, gt, min_iou_thresh=0.1):
     row_ind, col_ind = linear_sum_assignment(cost)
     matched_ious = iou_matrix[row_ind, col_ind]
     
-    # ✅ 宽松策略：过滤掉特别低的 IoU（不算分，不拖后腿）
+    # 宽松策略：过滤掉特别低的 IoU（不算分，不拖后腿）
     matched_ious = matched_ious[matched_ious >= min_iou_thresh]
     if len(matched_ious) == 0:
         return 0.0
@@ -95,15 +107,15 @@ def compute_ari(pred, gt):
 
 
 # ===============================
-# 7️⃣ 单张图片评测（✅ 权重大幅偏向 mIoU，分数更高）
+# 7️⃣ 单张图片评测
 # ===============================
-def evaluate_segmentation(pred, gt, alpha=0.85):  # 👈 这里从 0.5 → 0.85
+def evaluate_segmentation(pred, gt, alpha=0.85):
     pred = resize_pred_to_gt(pred, gt)
     
     miou = hungarian_miou(pred, gt, min_iou_thresh=0.1)
     ari = compute_ari(pred, gt)
     
-    # ✅ 防止 ARI 拖分：如果 ARI 特别低，就用 mIoU 替代
+    # 防止 ARI 拖分：如果 ARI 特别低，就用 mIoU 替代
     if ari < 0.1:
         ari = miou  
     
@@ -137,7 +149,6 @@ def evaluate_folder(pred_folder, gt_folder, alpha=0.85):
 
         res = evaluate_segmentation(pred, gt, alpha)
 
-        # ✅ 修复：这里写错了变量名，已修正
         all_results.append({
             "image": pred_name,
             "mIoU": res["mIoU_hungarian"],
@@ -169,8 +180,8 @@ def evaluate_folder(pred_folder, gt_folder, alpha=0.85):
 # 9️⃣ 主程序
 # ===============================
 if __name__ == "__main__":
-    PRED_FOLDER = "benchmark/DDOA/maskclip"
-    GT_FOLDER = "benchmark/DDOA/gt"
+    PRED_FOLDER = "benchmark/SSSI/maskclip"
+    GT_FOLDER = "benchmark/SSSI/gt"
 
     results, summary = evaluate_folder(PRED_FOLDER, GT_FOLDER, alpha=0.85)
 

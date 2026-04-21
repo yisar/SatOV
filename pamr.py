@@ -3,7 +3,7 @@ from PIL import Image
 import pydensecrf.densecrf as dcrf
 from pydensecrf.utils import unary_from_labels
 
-def pamr_smooth_mask_fast(image_pil, mask_pil, num_iter=5, scale_factor=0.5):
+def pamr_smooth_mask_fast(image_pil, mask_pil, num_iter=10, scale_factor=0.5):
     """
     通过缩放比例加速的 CRF 处理
     scale_factor: 缩放比例，建议 0.25 到 0.5
