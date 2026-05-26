@@ -1,17 +1,13 @@
-import json
 import os
 from typing import Union, List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from upa_fbs import UPA
+from upa import UPA
 
-# 尝试加载 ROOT 路径与外部模块
-try:
-    from libs.definitions import ROOT
-except ImportError:
-    ROOT = os.path.dirname(os.path.abspath(__file__))
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _DEFAULT_CLASSNAMES = ["object"]
 _DEFAULT_TEMPLATES = ['a photo of a {}.']
@@ -40,11 +36,11 @@ class DenseClip(nn.Module):
         
         # 3. 加载 AnyUp / UPA 引导上采样模块
         print(f"正在加载上采样模块...")
-        # try:
-        #     self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
-        # except Exception as e:
-        #     print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
-        #     self.any_up = None
+        try:
+            self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
+        except Exception as e:
+            print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
+            self.any_up = None
         
         # 这里的 UPA 假设是一个 nn.Module 类
         self.upa = UPA # 如果有具体的 UPA 实现类，请在此初始化
