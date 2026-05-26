@@ -1,195 +1,127 @@
 import numpy as np
 import os
 from PIL import Image
-from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.cluster import adjusted_rand_score
 
-
 # ===============================
-# 1️⃣ 自动读取 mask（支持灰度 / RGB）
+# 1. 读取图片（保持原始颜色）
 # ===============================
-def load_mask(path):
+def load_image(path):
     img = Image.open(path)
-    if img.mode == "RGB":
-        return rgb_to_label(img)
-    else:
-        return np.array(img)
-
+    return np.array(img)
 
 # ===============================
-# 2️⃣ RGB → label（极速版）
+# 2. 统一尺寸
 # ===============================
-def rgb_to_label(img):
-    img = np.array(img)
-    h, w, _ = img.shape
-    img_flat = img.reshape(-1, 3)
-    dt = np.dtype((np.void, 3 * img.dtype.itemsize))
-    void_flat = img_flat.view(dt)
-    unique_colors, inverse = np.unique(void_flat, return_inverse=True)
-    label = inverse.reshape(h, w).astype(np.int32)
-    return label
-
-
-# ===============================
-# 3️⃣ 对齐尺寸
-# ===============================
-def resize_pred_to_gt(pred, gt):
+def resize_to_gt(pred, gt):
     if pred.shape != gt.shape:
         pred = Image.fromarray(pred).resize((gt.shape[1], gt.shape[0]), Image.NEAREST)
         pred = np.array(pred)
     return pred
 
-
 # ===============================
-# 4️⃣ IoU matrix（✅ 已修复内存爆炸问题）
+# 3. 【核心】纯颜色对比：计算所有类别的 IoU，返回 mIoU
+# 不使用任何标签 ID，只对比像素颜色
 # ===============================
-def compute_iou_matrix(pred, gt):
-    pred = pred.ravel()
-    gt = gt.ravel()
-
-    # 只计算有效区域
-    mask = (pred >= 0) & (gt >= 0)
-    pred = pred[mask]
-    gt = gt[mask]
-
-    # ==============================================
-    # ✅ 关键修复：强制将标签映射为连续的 0,1,2...
-    # ==============================================
-    _, gt_inv = np.unique(gt, return_inverse=True)
-    _, pred_inv = np.unique(pred, return_inverse=True)
-
-    max_gt = int(gt_inv.max()) + 1 if len(gt_inv) > 0 else 0
-    max_pred = int(pred_inv.max()) + 1 if len(pred_inv) > 0 else 0
-
-    if max_gt == 0 or max_pred == 0:
-        return np.array([[0.0]])
-
-    # 现在绝对不会出现超大数组了
-    confusion = np.bincount(
-        gt_inv * max_pred + pred_inv,
-        minlength=max_gt * max_pred
-    ).reshape(max_gt, max_pred)
-
-    gt_sum = confusion.sum(axis=1, keepdims=True)
-    pred_sum = confusion.sum(axis=0, keepdims=True)
-    intersection = confusion
-    union = gt_sum + pred_sum - intersection
-    union[union == 0] = 1
-    iou_matrix = intersection / union
-    return iou_matrix
-
-
-# ===============================
-# 5️⃣ 【宽松版】匈牙利 mIoU（自动过滤低 IoU 类）
-# ===============================
-def hungarian_miou(pred, gt, min_iou_thresh=0.1):
-    iou_matrix = compute_iou_matrix(pred, gt)
-    if iou_matrix.size == 0:
-        return 0.0
+def compute_color_miou(pred, gt):
+    pred = resize_to_gt(pred, gt)
     
-    cost = 1 - iou_matrix
-    row_ind, col_ind = linear_sum_assignment(cost)
-    matched_ious = iou_matrix[row_ind, col_ind]
-    
-    # 宽松策略：过滤掉特别低的 IoU（不算分，不拖后腿）
-    matched_ious = matched_ious[matched_ious >= min_iou_thresh]
-    if len(matched_ious) == 0:
-        return 0.0
-    
-    return matched_ious.mean()
+    # 展平为 (H*W, C)
+    pred_flat = pred.reshape(-1, pred.shape[-1]) if pred.ndim == 3 else pred.reshape(-1, 1)
+    gt_flat   = gt.reshape(-1, gt.shape[-1]) if gt.ndim == 3 else gt.reshape(-1, 1)
 
+    # 取出 GT 里所有唯一颜色（只算真实存在的类别）
+    unique_gt_colors = np.unique(gt_flat, axis=0)
+    iou_list = []
+
+    # 对 GT 里每一个颜色，单独算 IoU
+    for color in unique_gt_colors:
+        # 生成二值掩码：当前颜色 = 前景，其余 = 背景
+        pred_mask = np.all(pred_flat == color, axis=-1)
+        gt_mask   = np.all(gt_flat == color, axis=-1)
+
+        # 逐像素算交集、并集
+        intersection = np.logical_and(pred_mask, gt_mask).sum()
+        union        = np.logical_or(pred_mask, gt_mask).sum()
+
+        if union == 0:
+            iou = 1.0
+        else:
+            iou = intersection / union
+        
+        iou_list.append(iou)
+
+    # 所有类别平均 = mIoU
+    return float(np.mean(iou_list)) if len(iou_list) > 0 else 0.0
 
 # ===============================
-# 6️⃣ ARI
+# 4. ARI（保持不变）
 # ===============================
 def compute_ari(pred, gt):
+    pred = resize_to_gt(pred, gt)
     return adjusted_rand_score(gt.ravel(), pred.ravel())
 
-
 # ===============================
-# 7️⃣ 单张图片评测
+# 5. 单张图评测
 # ===============================
-def evaluate_segmentation(pred, gt, alpha=0.85):
-    pred = resize_pred_to_gt(pred, gt)
+def evaluate(pred, gt, alpha=0.85):
+    miou = compute_color_miou(pred, gt)
+    ari  = compute_ari(pred, gt)
     
-    miou = hungarian_miou(pred, gt, min_iou_thresh=0.1)
-    ari = compute_ari(pred, gt)
-    
-    # 防止 ARI 拖分：如果 ARI 特别低，就用 mIoU 替代
     if ari < 0.1:
-        ari = miou  
+        ari = miou
     
-    final_score = alpha * miou + (1 - alpha) * ari
-    return {
-        "mIoU_hungarian": miou,
-        "ARI": ari,
-        "final_score": final_score
-    }
-
+    final = alpha * miou + (1 - alpha) * ari
+    return miou, ari, final
 
 # ===============================
-# 8️⃣ 批量文件夹评测
+# 6. 批量评测
 # ===============================
 def evaluate_folder(pred_folder, gt_folder, alpha=0.85):
-    pred_files = sorted([f for f in os.listdir(pred_folder) if f.endswith(('png', 'jpg', 'jpeg'))])
-    gt_files = sorted([f for f in os.listdir(gt_folder) if f.endswith(('png', 'jpg', 'jpeg'))])
+    pred_files = sorted([f for f in os.listdir(pred_folder) if f.endswith(('png','jpg','jpeg'))])
+    gt_files   = sorted([f for f in os.listdir(gt_folder) if f.endswith(('png','jpg','jpeg'))])
 
-    assert len(pred_files) == len(gt_files), "预测图和真值图数量不匹配！"
-    print(f"✅ 找到 {len(pred_files)} 张图片，开始批量评测...\n")
+    assert len(pred_files) == len(gt_files), "图片数量不匹配"
 
-    all_results = []
-    total_miou = total_ari = total_final = 0.0
+    total_miou = 0.0
+    total_ari  = 0.0
+    total_final= 0.0
 
-    for idx, (pred_name, gt_name) in enumerate(zip(pred_files, gt_files), 1):
-        pred_path = os.path.join(pred_folder, pred_name)
-        gt_path = os.path.join(gt_folder, gt_name)
+    print(f"✅ 共 {len(pred_files)} 张图片\n")
 
-        pred = load_mask(pred_path)
-        gt = load_mask(gt_path)
+    for i, (p_file, g_file) in enumerate(zip(pred_files, gt_files), 1):
+        pred = load_image(os.path.join(pred_folder, p_file))
+        gt   = load_image(os.path.join(gt_folder, g_file))
 
-        res = evaluate_segmentation(pred, gt, alpha)
+        miou, ari, final = evaluate(pred, gt, alpha)
+        
+        total_miou   += miou
+        total_ari    += ari
+        total_final  += final
 
-        all_results.append({
-            "image": pred_name,
-            "mIoU": res["mIoU_hungarian"],
-            "ARI": res["ARI"],
-            "final_score": res["final_score"]
-        })
+        print(f"[{i}/{len(pred_files)}] {p_file}")
+        print(f"  mIoU: {miou:.4f}  |  ARI: {ari:.4f}  |  final: {final:.4f}\n")
 
-        total_miou += res["mIoU_hungarian"]
-        total_ari += res["ARI"]
-        total_final += res["final_score"]
+    # 平均值
+    avg_miou   = total_miou / len(pred_files)
+    avg_ari    = total_ari / len(pred_files)
+    avg_final  = total_final / len(pred_files)
 
-        print(f"[{idx}/{len(pred_files)}] {pred_name}")
-        print(f"  mIoU: {res['mIoU_hungarian']:.4f} | ARI: {res['ARI']:.4f} | final: {res['final_score']:.4f}\n")
+    print("="*60)
+    print("📊 最终评测结果")
+    print("="*60)
+    print(f"平均 mIoU：  {avg_miou:.4f}")
+    print(f"平均 ARI：   {avg_ari:.4f}")
+    print(f"平均总分：   {avg_final:.4f}")
+    print("="*60)
 
-    avg_miou = total_miou / len(pred_files)
-    avg_ari = total_ari / len(pred_files)
-    avg_final = total_final / len(pred_files)
-
-    summary = {
-        "total_images": len(pred_files),
-        "average_mIoU": avg_miou,
-        "average_ARI": avg_ari,
-        "average_final_score": avg_final
-    }
-    return all_results, summary
-
+    return avg_miou, avg_ari, avg_final
 
 # ===============================
-# 9️⃣ 主程序
+# 主程序
 # ===============================
 if __name__ == "__main__":
-    PRED_FOLDER = "benchmark/SSSI/maskclip"
-    GT_FOLDER = "benchmark/SSSI/gt"
-
-    results, summary = evaluate_folder(PRED_FOLDER, GT_FOLDER, alpha=0.85)
-
-    print("=" * 60)
-    print("📊 批量评测汇总结果")
-    print("=" * 60)
-    print(f"总图片数量：{summary['total_images']}")
-    print(f"平均 mIoU：{summary['average_mIoU']:.4f}")
-    print(f"平均 ARI：{summary['average_ARI']:.4f}")
-    print(f"平均最终分数：{summary['average_final_score']:.4f}")
-    print("=" * 60)
+    PRED_FOLDER = "benchmark/UDD/clipseg"
+    GT_FOLDER   = "benchmark/UDD/gt"
+    
+    evaluate_folder(PRED_FOLDER, GT_FOLDER)
