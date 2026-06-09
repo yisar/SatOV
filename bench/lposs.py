@@ -230,6 +230,8 @@ def main():
         seg_result = draw_segmentation_masks(
             img_uint8, masks, colors=custom_palette, alpha=1.0
         )
+        seg_result_pil = TF.to_pil_image(seg_result)
+        seg_result_pil.save(args.filename.replace("dataset", "res").replace(".jpg", "_lposs.png"))
 
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
         ax[0].imshow(raw_image)
@@ -244,6 +246,7 @@ def main():
         fig.legend(handles=patches, loc="center right", title="Classes")
         plt.subplots_adjust(right=0.88)
         plt.show()
+        
 
 if __name__ == "__main__":
     main()
