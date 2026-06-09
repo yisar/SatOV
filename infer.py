@@ -73,7 +73,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/P2798.png")
+    parser.add_argument("--filename", type=str, default="./asset/img3.jpg")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument(
         "--stride", type=int, default=112, help="步长，推荐窗口的一半实现重叠"
@@ -194,7 +194,7 @@ def main():
         )
         save_path = f"{args.filename}"
         seg_result_pil = TF.to_pil_image(seg_result)
-        seg_result_pil.save(save_path.replace("dataset", "res"))
+        seg_result_pil.save(save_path.replace("dataset", "res").replace(".jpg", "_ours.png"))
 
         # 5. 可视化
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
