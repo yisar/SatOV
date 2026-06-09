@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from upa import UPA
+from grid_jbu import UPA
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))

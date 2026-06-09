@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from upa import UPA
+from grid_jbu import GridJBU
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +57,7 @@ class DenseClip(nn.Module):
         self.any_up = None
 
         # 这里的 UPA 假设是一个 nn.Module 类
-        self.upa = UPA  # 如果有具体的 UPA 实现类，请在此初始化
+        self.upa = GridJBU  # 如果有具体的 UPA 实现类，请在此初始化
         if self.only_clear is not False:
             self.upa = None
 
@@ -172,7 +172,7 @@ class DenseClip(nn.Module):
         # 利用广播机制，让每个 patch 减去该图像对应的全局背景均值
         debiased_patches = patch_tokens_out - cls_token_out
 
-            # 将特征还原为 2D 形状
+        # 将特征还原为 2D 形状
         lr_features = debiased_patches.permute(0, 2, 1).reshape(
             B, self.feat_dim, grid_h, grid_w
         )

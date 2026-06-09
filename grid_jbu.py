@@ -8,7 +8,7 @@ import time
 
 # --- 核心上采样启动函数 ---
 
-def UPA(HR_img, lr_modality):
+def GridJBU(HR_img, lr_modality):
     """
     Grid-based 快速联合双边上采样 (修复梯度传递版)
     """

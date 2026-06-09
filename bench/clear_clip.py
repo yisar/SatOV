@@ -268,8 +268,6 @@ def main():
         patches = [mpatches.Patch(color=legend_colors[i], label=classnames[i]) for i in range(len(classnames))]
         fig.legend(handles=patches, loc="center right", title="Land Cover Classes")
         plt.subplots_adjust(right=0.88)
-
-        plt.savefig(save_path.replace(".png", "_vis.png"), dpi=300, bbox_inches='tight')
         plt.show()
 
         print(f">>> 处理完成！\n   - 分割结果保存至: {save_path}\n   - 可视化图保存至: {save_path.replace('.png', '_vis.png')}")
