@@ -11,6 +11,7 @@ dependencies = [
     "torchaudio==2.4.1",
     "torchvision==0.19.1",
     "pydensecrf2>=1.1",
+    "transformers==4.35.2",
 ]
 
 [[tool.uv.index]]
