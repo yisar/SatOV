@@ -977,7 +977,6 @@ dependencies = [
     { name = "nvmpy" },
     { name = "open-clip-torch" },
     { name = "pydensecrf2" },
-    { name = "torch" },
     { name = "torchaudio" },
     { name = "torchvision" },
 ]
@@ -988,7 +987,6 @@ requires-dist = [
     { name = "nvmpy", specifier = ">=0.2.4" },
     { name = "open-clip-torch", specifier = ">=3.3.0" },
     { name = "pydensecrf2", specifier = ">=1.1" },
-    { name = "torch", specifier = "==2.4.1" },
     { name = "torchaudio", specifier = "==2.4.1" },
     { name = "torchvision", specifier = "==0.19.1" },
 ]
