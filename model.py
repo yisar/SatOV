@@ -35,12 +35,12 @@ class DenseClip(nn.Module):
         self.embed_dim = model.text_projection.shape[1] if hasattr(model, 'text_projection') else self.feat_dim
         
         # 3. 加载 AnyUp / UPA 引导上采样模块
-        print(f"正在加载上采样模块...")
-        try:
-            self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
-        except Exception as e:
-            print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
-            self.any_up = None
+        # print(f"正在加载上采样模块...")
+        # try:
+        #     self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
+        # except Exception as e:
+        #     print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
+        #     self.any_up = None
         
         # 这里的 UPA 假设是一个 nn.Module 类
         self.upa = UPA # 如果有具体的 UPA 实现类，请在此初始化
