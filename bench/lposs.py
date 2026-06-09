@@ -14,7 +14,7 @@ from scipy.sparse import csr_matrix, eye, diags
 from scipy.sparse import linalg as s_linalg
 from kornia.color import rgb_to_lab
 
-from model import DenseClip   # 请确保 model.py 中存在 DenseClip 类
+from model import DenseClip
 
 
 # ======================== LPOSS 核心算法（纯 CPU 版本） ========================
@@ -138,7 +138,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/img3.jpg")
+    parser.add_argument("--filename", type=str, default="./asset/img.jpg")
     parser.add_argument("--window_size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=112)
     return parser.parse_args()

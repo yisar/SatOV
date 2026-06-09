@@ -23,12 +23,12 @@ class DenseClip(nn.Module):
         if torch.cuda.is_available()
         else "cpu",
         jit: bool = False,
-        clear_clip: bool = False,
+        only_clear: bool = False,
     ):
         super().__init__()
         self.device = torch.device(device)
         self.model_name = name
-        self.only_clear = clear_clip
+        self.only_clear = only_clear
 
         # 1. 加载 OpenCLIP 模型
         pretrained_tag = "openai" if "laion" not in name else "laion2b_s34b_b88k"
@@ -58,7 +58,7 @@ class DenseClip(nn.Module):
 
         # 这里的 UPA 假设是一个 nn.Module 类
         self.upa = UPA  # 如果有具体的 UPA 实现类，请在此初始化
-        if self.only_clear is not None:
+        if self.only_clear is not False:
             self.upa = None
 
         # 4. 初始化视觉投影 (例如 768 -> 512)

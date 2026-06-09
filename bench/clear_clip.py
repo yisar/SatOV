@@ -113,7 +113,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, clear_clip=True)
+    model = DenseClip("ViT-B-16", classnames, device=args.device, only_clear=True)
     model.eval()
 
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082), (0.2686, 0.2613, 0.2757))
