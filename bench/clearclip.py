@@ -128,7 +128,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/img3.jpg")
+    parser.add_argument("--filename", type=str, default="./bench/UDD/origin/DJI_0591.png")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument("--stride", type=int, default=112, help="步长，推荐窗口的一半")
     return parser.parse_args()
@@ -250,7 +250,7 @@ def main():
         )
 
         # 保存结果
-        save_path = f"{args.filename}_pamr.png"
+        save_path = f"{args.filename.replace('origin', 'clearclip')}"
         seg_result_pil = TF.to_pil_image(seg_result)
         seg_result_pil.save(save_path)
 
@@ -270,7 +270,7 @@ def main():
         plt.subplots_adjust(right=0.88)
         plt.show()
 
-        print(f">>> 处理完成！\n   - 分割结果保存至: {save_path}\n   - 可视化图保存至: {save_path.replace('.png', '_vis.png')}")
+        print(f">>> 处理完成！\n   - 分割结果保存至: {save_path}\n ")
 
 
 if __name__ == "__main__":
