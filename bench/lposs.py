@@ -151,7 +151,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/img3.jpg")
+    parser.add_argument("--filename", type=str, default="./bench/SSSI/origin/6930.png")
     parser.add_argument("--window_size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=112)
     return parser.parse_args()
@@ -209,6 +209,7 @@ def main():
         print(f">>> 滑动窗口推理 (每窗口内 LPOSS): {len(y_steps)}x{len(x_steps)}")
         for y in y_steps:
             for x in x_steps:
+                print(f"{x},{y}")
                 y_end = min(y + win, h)
                 x_end = min(x + win, w)
                 crop_h = y_end - y
@@ -270,7 +271,7 @@ def main():
             img_uint8, masks, colors=custom_palette, alpha=1.0
         )
         seg_result_pil = TF.to_pil_image(seg_result)
-        seg_result_pil.save(args.filename.replace(".jpg", "_lposs.png"))
+        seg_result_pil.save(args.filename.replace('origin', 'lposs'))
 
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
         ax[0].imshow(raw_image)
