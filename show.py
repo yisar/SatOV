@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 # ====================== 请在这里修改你的根文件夹路径 ======================
-ROOT_FOLDER = r"./benchmark"  # 例如：r"D:\data\models"
+ROOT_FOLDER = r"./bench"  # 例如：r"D:\data\models"
 # ==========================================================================
 
 # 设置中文字体（解决标题中文乱码）

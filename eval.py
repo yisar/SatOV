@@ -1,127 +1,242 @@
-import numpy as np
 import os
+import numpy as np
 from PIL import Image
-from sklearn.metrics.cluster import adjusted_rand_score
+from scipy.optimize import linear_sum_assignment
 
-# ===============================
-# 1. 读取图片（保持原始颜色）
-# ===============================
-def load_image(path):
-    img = Image.open(path)
-    return np.array(img)
 
-# ===============================
-# 2. 统一尺寸
-# ===============================
-def resize_to_gt(pred, gt):
-    if pred.shape != gt.shape:
-        pred = Image.fromarray(pred).resize((gt.shape[1], gt.shape[0]), Image.NEAREST)
-        pred = np.array(pred)
-    return pred
+# =====================================================
+# 固定调色板
+# =====================================================
+CUSTOM_PALETTE = np.array(
+    [
+        (68, 1, 84),
+        (72, 40, 120),
+        (62, 74, 137),
+        (49, 104, 142),
+        (38, 130, 142),
+        (31, 158, 137),
+        (73, 193, 110),
+        (160, 218, 57),
+        (253, 231, 37),
+    ],
+    dtype=np.int16,
+)
 
-# ===============================
-# 3. 【核心】纯颜色对比：计算所有类别的 IoU，返回 mIoU
-# 不使用任何标签 ID，只对比像素颜色
-# ===============================
-def compute_color_miou(pred, gt):
-    pred = resize_to_gt(pred, gt)
-    
-    # 展平为 (H*W, C)
-    pred_flat = pred.reshape(-1, pred.shape[-1]) if pred.ndim == 3 else pred.reshape(-1, 1)
-    gt_flat   = gt.reshape(-1, gt.shape[-1]) if gt.ndim == 3 else gt.reshape(-1, 1)
+NUM_CLASSES = len(CUSTOM_PALETTE)
 
-    # 取出 GT 里所有唯一颜色（只算真实存在的类别）
-    unique_gt_colors = np.unique(gt_flat, axis=0)
-    iou_list = []
 
-    # 对 GT 里每一个颜色，单独算 IoU
-    for color in unique_gt_colors:
-        # 生成二值掩码：当前颜色 = 前景，其余 = 背景
-        pred_mask = np.all(pred_flat == color, axis=-1)
-        gt_mask   = np.all(gt_flat == color, axis=-1)
+# =====================================================
+# RGB -> 最近Palette类别
+# =====================================================
+def rgb_to_label(img):
 
-        # 逐像素算交集、并集
-        intersection = np.logical_and(pred_mask, gt_mask).sum()
-        union        = np.logical_or(pred_mask, gt_mask).sum()
+    img = np.asarray(img, dtype=np.int16)
 
-        if union == 0:
-            iou = 1.0
-        else:
-            iou = intersection / union
-        
-        iou_list.append(iou)
+    h, w, _ = img.shape
 
-    # 所有类别平均 = mIoU
-    return float(np.mean(iou_list)) if len(iou_list) > 0 else 0.0
+    pixels = img.reshape(-1, 3)
 
-# ===============================
-# 4. ARI（保持不变）
-# ===============================
-def compute_ari(pred, gt):
-    pred = resize_to_gt(pred, gt)
-    return adjusted_rand_score(gt.ravel(), pred.ravel())
+    # (N,9,3)
+    diff = pixels[:, None, :] - CUSTOM_PALETTE[None, :, :]
 
-# ===============================
-# 5. 单张图评测
-# ===============================
-def evaluate(pred, gt, alpha=0.85):
-    miou = compute_color_miou(pred, gt)
-    ari  = compute_ari(pred, gt)
-    
-    if ari < 0.1:
-        ari = miou
-    
-    final = alpha * miou + (1 - alpha) * ari
-    return miou, ari, final
+    dist = np.sum(diff * diff, axis=2)
 
-# ===============================
-# 6. 批量评测
-# ===============================
-def evaluate_folder(pred_folder, gt_folder, alpha=0.85):
-    pred_files = sorted([f for f in os.listdir(pred_folder) if f.endswith(('png','jpg','jpeg'))])
-    gt_files   = sorted([f for f in os.listdir(gt_folder) if f.endswith(('png','jpg','jpeg'))])
+    labels = np.argmin(dist, axis=1)
 
-    assert len(pred_files) == len(gt_files), "图片数量不匹配"
+    return labels.reshape(h, w).astype(np.int32)
 
-    total_miou = 0.0
-    total_ari  = 0.0
-    total_final= 0.0
 
-    print(f"✅ 共 {len(pred_files)} 张图片\n")
+# =====================================================
+# Load Mask
+# =====================================================
+def load_mask(path):
 
-    for i, (p_file, g_file) in enumerate(zip(pred_files, gt_files), 1):
-        pred = load_image(os.path.join(pred_folder, p_file))
-        gt   = load_image(os.path.join(gt_folder, g_file))
+    img = Image.open(path).convert("RGB")
 
-        miou, ari, final = evaluate(pred, gt, alpha)
-        
-        total_miou   += miou
-        total_ari    += ari
-        total_final  += final
+    return rgb_to_label(img)
 
-        print(f"[{i}/{len(pred_files)}] {p_file}")
-        print(f"  mIoU: {miou:.4f}  |  ARI: {ari:.4f}  |  final: {final:.4f}\n")
 
-    # 平均值
-    avg_miou   = total_miou / len(pred_files)
-    avg_ari    = total_ari / len(pred_files)
-    avg_final  = total_final / len(pred_files)
+# =====================================================
+# Resize
+# =====================================================
+def resize_pred_to_gt(pred, gt):
 
-    print("="*60)
-    print("📊 最终评测结果")
-    print("="*60)
-    print(f"平均 mIoU：  {avg_miou:.4f}")
-    print(f"平均 ARI：   {avg_ari:.4f}")
-    print(f"平均总分：   {avg_final:.4f}")
-    print("="*60)
+    if pred.shape == gt.shape:
+        return pred
 
-    return avg_miou, avg_ari, avg_final
+    pred_img = Image.fromarray(pred.astype(np.uint8))
 
-# ===============================
-# 主程序
-# ===============================
+    pred_img = pred_img.resize(
+        (gt.shape[1], gt.shape[0]),
+        Image.NEAREST,
+    )
+
+    return np.array(pred_img)
+
+
+# =====================================================
+# Confusion Matrix
+# =====================================================
+def compute_confusion_matrix(pred, gt):
+
+    valid = (pred >= 0) & (gt >= 0)
+
+    pred = pred[valid]
+    gt = gt[valid]
+
+    confusion = np.bincount(
+        gt * NUM_CLASSES + pred,
+        minlength=NUM_CLASSES * NUM_CLASSES,
+    ).reshape(NUM_CLASSES, NUM_CLASSES)
+
+    return confusion
+
+
+# =====================================================
+# Hungarian Matching
+# =====================================================
+def hungarian_match(confusion):
+
+    gt_sum = confusion.sum(axis=1, keepdims=True)
+
+    pred_sum = confusion.sum(axis=0, keepdims=True)
+
+    intersection = confusion
+
+    union = gt_sum + pred_sum - intersection
+
+    iou_matrix = intersection / np.maximum(union, 1)
+
+    row_ind, col_ind = linear_sum_assignment(1.0 - iou_matrix)
+
+    return row_ind, col_ind, iou_matrix
+
+
+# =====================================================
+# Hungarian mIoU
+# =====================================================
+def compute_miou(pred, gt):
+
+    pred = resize_pred_to_gt(pred, gt)
+
+    confusion = compute_confusion_matrix(pred, gt)
+
+    row_ind, col_ind, iou_matrix = hungarian_match(confusion)
+
+    matched_iou = iou_matrix[row_ind, col_ind]
+
+    valid = matched_iou > 0
+
+    if valid.sum() == 0:
+        return 0.0
+
+    return float(matched_iou[valid].mean())
+
+
+# =====================================================
+# Hungarian Pixel Accuracy
+# =====================================================
+def compute_pixel_acc(pred, gt):
+
+    pred = resize_pred_to_gt(pred, gt)
+
+    confusion = compute_confusion_matrix(pred, gt)
+
+    row_ind, col_ind, _ = hungarian_match(confusion)
+
+    matched_confusion = confusion[:, col_ind]
+
+    correct = np.trace(matched_confusion)
+
+    total = confusion.sum()
+
+    return float(correct / max(total, 1))
+
+
+# =====================================================
+# Evaluate One
+# =====================================================
+def evaluate_image(pred, gt):
+
+    return {
+        "mIoU": compute_miou(pred, gt),
+        "PixelAcc": compute_pixel_acc(pred, gt),
+    }
+
+
+# =====================================================
+# Evaluate Folder
+# =====================================================
+def evaluate_folder(pred_folder, gt_folder):
+
+    pred_files = sorted(
+        [
+            f
+            for f in os.listdir(pred_folder)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+    )
+
+    gt_files = sorted(
+        [
+            f
+            for f in os.listdir(gt_folder)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+    )
+
+    assert len(pred_files) == len(gt_files)
+
+    print(f"\nFound {len(pred_files)} images\n")
+
+    all_miou = []
+    all_acc = []
+
+    for idx, (pred_name, gt_name) in enumerate(
+        zip(pred_files, gt_files),
+        1,
+    ):
+        pred = load_mask(os.path.join(pred_folder, pred_name))
+
+        gt = load_mask(os.path.join(gt_folder, gt_name))
+
+        result = evaluate_image(pred, gt)
+
+        all_miou.append(result["mIoU"])
+        all_acc.append(result["PixelAcc"])
+
+        print(f"[{idx}/{len(pred_files)}] {pred_name}")
+
+        print(f"mIoU={result['mIoU']:.4f} | PixelAcc={result['PixelAcc']:.4f}")
+
+    avg_miou = float(np.mean(all_miou))
+    avg_acc = float(np.mean(all_acc))
+
+    composite = np.sqrt(avg_miou * avg_acc)
+
+    print("\n" + "=" * 60)
+
+    print(f"Average mIoU      : {avg_miou:.4f}")
+    print(f"Average PixelAcc  : {avg_acc:.4f}")
+    print(f"Composite Score   : {composite:.4f}")
+
+    print("=" * 60)
+
+    return {
+        "mIoU": avg_miou,
+        "PixelAcc": avg_acc,
+        "CompositeScore": composite,
+    }
+
+
+# =====================================================
+# Main
+# =====================================================
 if __name__ == "__main__":
-    PRED_FOLDER = "benchmark/UDD/clipseg"
-    GT_FOLDER   = "benchmark/UDD/gt"
-    
-    evaluate_folder(PRED_FOLDER, GT_FOLDER)
+    PRED_FOLDER = "bench/SSSI/maskclip"
+    GT_FOLDER = "bench/SSSI/gt"
+
+    evaluate_folder(
+        PRED_FOLDER,
+        GT_FOLDER,
+    )
