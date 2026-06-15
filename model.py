@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
 from grid_jbu import GridJBU
+from util.featup import JBUOne
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -58,17 +59,12 @@ class DenseClip(nn.Module):
             self.up = GridJBU
 
         elif upsampler == "featup":
-                hub_model = torch.hub.load(
-                    "mhamilton723/FeatUp",
-                    "clip",
-                    verbose=False
-                )
-                self.up = lambda g, f: hub_model.upsampler(f, g)
+                hub_model = JBUOne(in_channels=None, feat_dim=512).to(device).eval()
+                self.up = lambda g, f: hub_model(f, g)
 
         if self.only_clear is not False:
             self.up = None
 
-        # 4. 初始化视觉投影 (例如 768 -> 512)
         # 将 CLIP 原生的视觉投影权重迁移到 Conv2d(1x1) 中，方便处理特征图
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
         if hasattr(self.visual, "proj") and self.visual.proj is not None:
@@ -195,12 +191,6 @@ class DenseClip(nn.Module):
 
         return up_features
 
-    @torch.no_grad()
-    def get_features(self, x, hr_guide):
-        """返回 CLIP 稠密特征（用于 GLA 的 Q/K/V）"""
-        features = self._stem(x.to(self.device), hr_guide.to(self.device))
-        features = self.v_proj(features)
-        return F.normalize(features, dim=1)
 
     def forward(self, images, hr_guide: Optional[torch.Tensor] = None):
         """
