@@ -1,4 +1,3 @@
-import importlib
 import os
 from typing import Union, List, Optional
 import torch
@@ -48,6 +47,7 @@ class DenseClip(nn.Module):
             if hasattr(model, "text_projection")
             else self.feat_dim
         )
+        self.up = None
 
         if upsampler == "anyup":
             self.up = (
@@ -60,7 +60,7 @@ class DenseClip(nn.Module):
 
         elif upsampler == "featup":
             hub_model = load_featup_upsampler(device=self.device)
-            self.up = lambda g, f: hub_model(f, g)
+            self.up = lambda g, f: hub_model(g, f)
 
         if self.only_clear is not False:
             self.up = None

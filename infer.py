@@ -114,7 +114,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="featup")
+    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="ttaup")
     print(model)
     model.eval()
 
@@ -181,8 +181,8 @@ def main():
         probs_np = full_probs.cpu().numpy()
 
         # 2. 执行全局 Dense CRF 优化 (核心步骤)
-        # print(">>> 正在运行全局 Dense CRF 优化，请稍候...")
-        # probs_np = apply_dense_crf(img_np, probs_np)
+        print(">>> 正在运行全局 Dense CRF 优化，请稍候...")
+        probs_np = apply_dense_crf(img_np, probs_np)
 
         # 3. 最终类别判定
         max_idx = probs_np.argmax(axis=0)

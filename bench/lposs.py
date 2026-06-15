@@ -25,7 +25,6 @@ def make_input_divisible(x: torch.Tensor, patch_size=16) -> torch.Tensor:
     x = F.pad(x, (0, pad_w, 0, pad_h), value=0)
     return x
 
-
 def reshape_windows(x):
     height_width = [(y.shape[0], y.shape[1]) for y in x]
     dim = x[0].shape[-1]
@@ -151,7 +150,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./bench/SSSI/origin/6930.png")
+    parser.add_argument("--filename", type=str, default="./asset/img2.jpg")
     parser.add_argument("--window_size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=112)
     return parser.parse_args()
@@ -189,7 +188,7 @@ def main():
     ]
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
-    model = DenseClip("ViT-B-16", classnames, device=device, only_clear=True)
+    model = DenseClip("ViT-B-16", classnames, device=device)
     model.eval()
 
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082), (0.2686, 0.2613, 0.2757))
