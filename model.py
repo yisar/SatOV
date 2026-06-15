@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
+from aaa import GaussianUpsamplerWrapper
 from grid_jbu import GridJBU
 from bench.segearthov import load_featup_upsampler
 
@@ -23,7 +24,7 @@ class DenseClip(nn.Module):
         else "cpu",
         jit: bool = False,
         only_clear: bool = False,
-        upsampler="ttaup",
+        upsampler="gfup",
     ):
         super().__init__()
         self.device = torch.device(device)
@@ -55,8 +56,8 @@ class DenseClip(nn.Module):
                 .to(self.device)
                 .eval()
             )
-        elif upsampler == "ttaup":
-            self.up = GridJBU
+        elif upsampler == "gfup":
+            self.up = GaussianUpsamplerWrapper()
 
         elif upsampler == "featup":
             hub_model = load_featup_upsampler(device=self.device)
