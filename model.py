@@ -1,3 +1,4 @@
+import importlib
 import os
 from typing import Union, List, Optional
 import torch
@@ -5,12 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
 from grid_jbu import GridJBU
-from util.featup import JBUOne
-
+from bench.segearthov import load_featup_upsampler
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CLASSNAMES = ["object"]
 _DEFAULT_TEMPLATES = ["a photo of a {}."]
+
 
 class DenseClip(nn.Module):
     def __init__(
@@ -48,7 +49,6 @@ class DenseClip(nn.Module):
             else self.feat_dim
         )
 
-
         if upsampler == "anyup":
             self.up = (
                 torch.hub.load("wimmerth/anyup", "anyup", verbose=False)
@@ -59,8 +59,8 @@ class DenseClip(nn.Module):
             self.up = GridJBU
 
         elif upsampler == "featup":
-                hub_model = JBUOne(in_channels=None, feat_dim=512).to(device).eval()
-                self.up = lambda g, f: hub_model(f, g)
+            hub_model = load_featup_upsampler(device=self.device)
+            self.up = lambda g, f: hub_model(f, g)
 
         if self.only_clear is not False:
             self.up = None
@@ -191,7 +191,6 @@ class DenseClip(nn.Module):
 
         return up_features
 
-
     def forward(self, images, hr_guide: Optional[torch.Tensor] = None):
         """
         输入: images [B, 3, H, W]
@@ -202,6 +201,10 @@ class DenseClip(nn.Module):
             images.to(self.device),
             hr_guide.to(self.device) if hr_guide is not None else None,
         )
+
+        # 🔥 最小修复：只在 mismatch 时重建 v_proj
+        # if features.shape[1] != self.v_proj.in_channels:
+        # self.v_proj = nn.Conv2d(features.shape[1], self.embed_dim, 1).to(self.device)
 
         # 2. 视觉投影到语义嵌入空间并归一化
         # features: [B, feat_dim, H, W] -> [B, embed_dim, H, W]

@@ -158,7 +158,7 @@ def gs_jbu_grid_differentiable(feat_lr, guide_hr, sx, sy, th, sr, num_bins=16):
 # --- 模型定义 ---
 
 class LearnablePixelwiseAnisoJBU_NoParent(nn.Module):
-    def __init__(self, Hl, Wl, scale=16, init_sigma=8.0, init_sigma_r=0.1, num_bins=12):
+    def __init__(self, Hl, Wl, scale=8, init_sigma=8.0, init_sigma_r=0.1, num_bins=6):
         super().__init__()
         self.scale = scale
         self.num_bins = num_bins
