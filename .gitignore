@@ -55,7 +55,7 @@ cover/
 *.mo
 *.pot
 *.pt
-
+SegEarth-OV/**
 # Django stuff:
 *.log
 local_settings.py

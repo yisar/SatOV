@@ -64,7 +64,7 @@ def GridJBU(HR_img, lr_modality):
         # 修复：GradScaler 第一个参数也需要字符串类型的 device_type
         scaler = torch.amp.GradScaler(device_type, enabled=USE_AMP)
 
-        print(f"\n[UPA-Grid] 启动 | 修复梯度流 | 尺寸: {H}x{W} | 缩放: {scale}x | 设备: {device}")
+        print(f"\n[TTAUP-Grid] 启动 | 修复梯度流 | 尺寸: {H}x{W} | 缩放: {scale}x | 设备: {device}")
 
         # 4. 迭代优化
         for step in range(1, max_steps + 1):
@@ -91,7 +91,7 @@ def GridJBU(HR_img, lr_modality):
         with torch.no_grad(), torch.amp.autocast(device_type, enabled=USE_AMP, dtype=AMP_DTYPE):
             hr_feat = model(lr_modality.to(torch.float32), hr)
         
-        print(f"[UPA-Grid] 完成 | 耗时: {time.time() - start_time:.2f}s")
+        print(f"[TTAUP-Grid] 完成 | 耗时: {time.time() - start_time:.2f}s")
         return hr_feat
 
 # --- 核心算子：可微分的双边网格 (Differentiable Bilateral Grid) ---

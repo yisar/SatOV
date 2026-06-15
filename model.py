@@ -8,10 +8,8 @@ from grid_jbu import GridJBU
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-
 _DEFAULT_CLASSNAMES = ["object"]
 _DEFAULT_TEMPLATES = ["a photo of a {}."]
-
 
 class DenseClip(nn.Module):
     def __init__(
@@ -24,6 +22,7 @@ class DenseClip(nn.Module):
         else "cpu",
         jit: bool = False,
         only_clear: bool = False,
+        upsampler="ttaup",
     ):
         super().__init__()
         self.device = torch.device(device)
@@ -48,18 +47,26 @@ class DenseClip(nn.Module):
             else self.feat_dim
         )
 
-        # 3. 加载 AnyUp / UPA 引导上采样模块
-        # print(f"正在加载上采样模块...")
-        # try:
-        #     self.any_up = torch.hub.load("wimmerth/anyup", "anyup", verbose=False).to(self.device).eval()
-        # except Exception as e:
-        #     print(f"警告：AnyUp 加载失败({e})，将尝试使用 UPA 或线性插值。")
-        self.any_up = None
 
-        # 这里的 UPA 假设是一个 nn.Module 类
-        self.upa = GridJBU  # 如果有具体的 UPA 实现类，请在此初始化
+        if upsampler == "anyup":
+            self.up = (
+                torch.hub.load("wimmerth/anyup", "anyup", verbose=False)
+                .to(self.device)
+                .eval()
+            )
+        elif upsampler == "ttaup":
+            self.up = GridJBU
+
+        elif upsampler == "featup":
+                hub_model = torch.hub.load(
+                    "mhamilton723/FeatUp",
+                    "clip",
+                    verbose=False
+                )
+                self.up = lambda g, f: hub_model.upsampler(f, g)
+
         if self.only_clear is not False:
-            self.upa = None
+            self.up = None
 
         # 4. 初始化视觉投影 (例如 768 -> 512)
         # 将 CLIP 原生的视觉投影权重迁移到 Conv2d(1x1) 中，方便处理特征图
@@ -179,10 +186,8 @@ class DenseClip(nn.Module):
 
         # --- 5. 引导上采样 ---
         guide = hr_guide if hr_guide is not None else x
-        if self.upa is not None:
-            up_features = self.upa(guide, lr_features)
-        elif self.any_up is not None:
-            up_features = self.any_up(guide, lr_features)
+        if self.up is not None:
+            up_features = self.up(guide, lr_features)
         else:
             up_features = F.interpolate(
                 lr_features, size=(H, W), mode="bilinear", align_corners=False
