@@ -441,7 +441,6 @@ def main():
         )
         print(f"Epoch {epoch + 1} Loss: {train_loss:.6f}")
 
-        # 每个epoch保存一次模型（覆盖last）
         torch.save(model.state_dict(), os.path.join(log_dir, "last_model.pth"))
         print(f"Saved model checkpoint at epoch {epoch + 1}")
 
