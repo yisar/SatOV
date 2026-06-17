@@ -1,22 +1,16 @@
 import os
-import random
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-from torch import einsum
 from torch.utils.data import DataLoader, Dataset
-from torch.utils.tensorboard import SummaryWriter
 from torchvision.transforms.functional import InterpolationMode
 from einops import rearrange
-from typing import Tuple
-import timm
+import open_clip
+from PIL import Image
 
 
-# ==================== 核心网络模块（保持不变） ====================
-
-
+# ==================== 基础模块 ====================
 def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
@@ -28,6 +22,7 @@ class RoPE(nn.Module):
         self.dim = dim
         self.theta = theta
         self.freqs = nn.Parameter(torch.empty(2, self.dim))
+        self._device_weight_init()
 
     def _device_weight_init(self):
         freqs_1d = self.theta ** torch.linspace(0, -1, self.dim // 4)
@@ -127,8 +122,9 @@ class CrossAttention(nn.Module):
         self.norm_v = nn.RMSNorm(value_dim)
         self.attention = nn.MultiheadAttention(
             embed_dim=query_dim,
-            vdim=value_dim,
             num_heads=num_heads,
+            kdim=key_dim,
+            vdim=value_dim,
             dropout=0.0,
             batch_first=True,
         )
@@ -136,11 +132,9 @@ class CrossAttention(nn.Module):
     def forward(self, query, key, value):
         query = self.norm_q(query)
         key = self.norm_k(key)
-        _, attn_scores = self.attention(
-            query, key, self.norm_v(value), average_attn_weights=True
-        )
-        attn_output = einsum("b i j, b j d -> b i d", attn_scores, value)
-        return attn_output, attn_scores
+        value = self.norm_v(value)
+        attn_output, _ = self.attention(query, key, value)
+        return attn_output
 
 
 class CrossAttentionBlock(nn.Module):
@@ -156,7 +150,7 @@ class CrossAttentionBlock(nn.Module):
         q = rearrange(q, "b c h w -> b (h w) c")
         k = rearrange(k, "b c h w -> b (h w) c")
         v = rearrange(v, "b c h w -> b (h w) c")
-        features, _ = self.cross_attn(q, k, v)
+        features = self.cross_attn(q, k, v)
         return features
 
 
@@ -169,6 +163,7 @@ def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
     return coords
 
 
+# ==================== JAFAR 模型（添加输出投影） ====================
 class JAFAR(nn.Module):
     def __init__(
         self, input_dim=3, qk_dim=128, v_dim=384, kernel_size=1, num_heads=4, **kwargs
@@ -208,7 +203,8 @@ class JAFAR(nn.Module):
         self.cross_decode = CrossAttentionBlock(qk_dim, qk_dim, v_dim, num_heads)
         self.sft_key = SFTModulation(qk_dim, qk_dim)
         self.rope = RoPE(qk_dim)
-        self.rope._device_weight_init()
+        # 输出投影：将 qk_dim 映射到 v_dim
+        self.out_proj = nn.Conv2d(qk_dim, v_dim, kernel_size=1)
 
     def upsample(self, encoded_image, features, output_size):
         _, _, h, w = features.shape
@@ -235,33 +231,63 @@ class JAFAR(nn.Module):
         encoded_image = rearrange(encoded_image, "b (h w) c -> b c h w", h=h)
         features = self.upsample(encoded_image, features, output_size)
         features = rearrange(features, "b (h w) c -> b c h w", h=output_size[0])
+        # 投影到目标维度
+        features = self.out_proj(features)
         return features
 
 
+# ==================== CLIP 封装（修正维度） ====================
 class CLIPViTWrapper(nn.Module):
-    def __init__(self, name="vit_base_patch16_clip_384", norm=True, **kwargs):
+    def __init__(
+        self, model_name="ViT-B/16", pretrained="laion2b_s34b_b88k", norm=True
+    ):
         super().__init__()
-        self.name = name
-        self.model = timm.create_model(
-            name, pretrained=True, num_classes=0, dynamic_img_size=True
+        self.model, _, _ = open_clip.create_model_and_transforms(
+            model_name=model_name, pretrained=pretrained
         )
-        self.model = self.model.eval()
-        self.embed_dim = self.model.embed_dim
+        self.model.eval()
+        visual = self.model.visual
+        # 使用 Transformer 宽度，而非投影输出维度
+        self.embed_dim = visual.ln_post.normalized_shape[0]  # ViT-B/16 为 768
+        self.patch_size = visual.patch_size[0]
+        img_size = visual.image_size
+        if isinstance(img_size, int):
+            self.image_size = (img_size, img_size)
+        else:
+            self.image_size = tuple(img_size)
         self.norm = norm
-        self.patch_size = 16
-        data_config = timm.data.resolve_model_data_config(model=self.model)
-        self.config = data_config
 
-    def forward(self, x: torch.Tensor, n=1) -> Tuple[torch.Tensor, torch.Tensor]:
-        feats, cls_token = self.model.forward_intermediates(
-            x,
-            n,
-            return_prefix_tokens=True,
-            norm=self.norm,
-            output_fmt="NCHW",
-            intermediates_only=True,
-        )[0]
-        return feats, cls_token
+    @torch.no_grad()
+    def forward(self, x):
+        # 统一 resize 到模型期望尺寸
+        if x.shape[-2:] != self.image_size:
+            x = F.interpolate(
+                x, size=self.image_size, mode="bilinear", align_corners=False
+            )
+
+        visual = self.model.visual
+        x = visual.conv1(x)  # [B, C, H_patch, W_patch]
+        B, C, H, W = x.shape
+        x = x.reshape(B, C, H * W).permute(0, 2, 1)
+
+        cls_token = visual.class_embedding.to(x.dtype)
+        cls_token = cls_token.unsqueeze(0).expand(B, -1, -1)
+        x = torch.cat([cls_token, x], dim=1)
+        x = x + visual.positional_embedding[: x.shape[1]]
+        x = visual.patch_dropout(x)
+        x = visual.ln_pre(x)
+        x = x.permute(1, 0, 2)
+        for blk in visual.transformer.resblocks:
+            x = blk(x)
+        x = x.permute(1, 0, 2)
+
+        if self.norm:
+            x = visual.ln_post(x)
+
+        cls_token = x[:, 0]
+        feat = x[:, 1:]
+        feat = feat.permute(0, 2, 1).reshape(B, -1, H, W)
+        return feat, cls_token
 
 
 # ==================== 损失函数 ====================
@@ -278,21 +304,16 @@ class AlignmentLoss(nn.Module):
         return cos_loss + l2_loss
 
 
-# ==================== 数据集（仅训练） ====================
+# ==================== 数据集 ====================
 class JAFARDataset(Dataset):
-    """
-    官方训练方式：从高分辨率图像下采样得到低分辨率视图
-    """
-
-    def __init__(self, root_dir, hr_size=448, min_scale=2, max_scale=4):
+    def __init__(self, root_dir, hr_size=448, lr_size=224):
         self.root_dir = root_dir
         self.hr_size = hr_size
-        self.min_scale = min_scale
-        self.max_scale = max_scale
+        self.lr_size = lr_size
         self.image_paths = [
             os.path.join(root_dir, f)
             for f in os.listdir(root_dir)
-            if f.endswith(("png", "jpg", "jpeg"))
+            if f.lower().endswith(("png", "jpg", "jpeg"))
         ]
 
         self.hr_transform = T.Compose(
@@ -310,20 +331,12 @@ class JAFARDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        from PIL import Image
-
         img_path = self.image_paths[idx]
         image = Image.open(img_path).convert("RGB")
-
         hr_image = self.hr_transform(image)
-        h, w = hr_image.shape[-2:]
-
-        scale = random.uniform(self.min_scale, self.max_scale)
-        lr_h, lr_w = int(h / scale), int(w / scale)
-
         lr_image = F.interpolate(
             hr_image.unsqueeze(0),
-            size=(lr_h, lr_w),
+            size=(self.lr_size, self.lr_size),
             mode="bilinear",
             align_corners=False,
         ).squeeze(0)
@@ -335,15 +348,9 @@ class JAFARDataset(Dataset):
         }
 
 
-# ==================== 训练函数 ====================
-def seed_worker():
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
+# ==================== 训练 ====================
 def train_one_epoch(
-    model, clip_backbone, dataloader, criterion, optimizer, device, epoch, writer
+    model, clip_backbone, dataloader, criterion, optimizer, device, epoch
 ):
     model.train()
     clip_backbone.eval()
@@ -377,21 +384,17 @@ def train_one_epoch(
             )
 
     avg_loss = total_loss / num_batches
-    writer.add_scalar("Train/Loss", avg_loss, epoch)
     return avg_loss
 
 
-# ==================== 主函数 ====================
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # 冻结的 CLIP 编码器
-    clip_backbone = CLIPViTWrapper(name="vit_base_patch16_clip_384").to(device)
+    clip_backbone = CLIPViTWrapper().to(device)
     feature_dim = clip_backbone.embed_dim
     print(f"CLIP feature dim: {feature_dim}")
 
-    # JAFAR 模型
     model = JAFAR(
         input_dim=3, qk_dim=128, v_dim=feature_dim, kernel_size=3, num_heads=4
     ).to(device)
@@ -399,8 +402,7 @@ def main():
     criterion = AlignmentLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4)
 
-    # 数据目录（仅训练集）
-    data_dir = "data/train"
+    data_dir = "data/commercial_area"
     if not os.path.exists(data_dir):
         os.makedirs(data_dir, exist_ok=True)
         print(
@@ -408,25 +410,16 @@ def main():
         )
         return
 
-    train_dataset = JAFARDataset(data_dir, hr_size=448, min_scale=2, max_scale=4)
-
-    g = torch.Generator()
-    g.manual_seed(0)
-
+    train_dataset = JAFARDataset(data_dir, hr_size=448, lr_size=224)
     train_loader = DataLoader(
         train_dataset,
         batch_size=4,
         shuffle=True,
         num_workers=4,
-        worker_init_fn=seed_worker,
-        generator=g,
     )
 
-    log_dir = "runs/jafar_train_only"
-    os.makedirs(log_dir, exist_ok=True)
-    writer = SummaryWriter(log_dir=log_dir)
-
     num_epochs = 50
+    save_path = "model_last.pth"
 
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(
@@ -436,15 +429,13 @@ def main():
             criterion,
             optimizer,
             device,
-            epoch,
-            writer,
+            epoch + 1,
         )
-        print(f"Epoch {epoch + 1} Loss: {train_loss:.6f}")
+        print(f"Epoch {epoch + 1} Average Loss: {train_loss:.6f}")
 
-        torch.save(model.state_dict(), os.path.join(log_dir, "last_model.pth"))
-        print(f"Saved model checkpoint at epoch {epoch + 1}")
+        torch.save(model.state_dict(), save_path)
+        print(f"Model saved to {save_path}")
 
-    writer.close()
     print("Training complete!")
 
 
