@@ -17,9 +17,6 @@ def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
     coords = rearrange(coord_map, "b h w c -> b (h w) c", h=h, w=w)
     return coords
 
-
-
-
 # Convolutions
 class EncBlock(nn.Module):
     def __init__(
@@ -219,7 +216,7 @@ class SFT(nn.Module):
         return gamma * self.norm(image) + beta  # Spatial modulation
 
 
-class JAFAR(nn.Module):
+class SatUp(nn.Module):
     def __init__(
         self,
         dim=128,
