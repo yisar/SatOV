@@ -19,7 +19,6 @@ dependencies = [
     "jsonargparse>=4.49.0",
     "omegaconf>=2.3.1",
     "tensorboard>=2.20.0",
-    "natten>=0.21.6",
 ]
 
 [[tool.uv.index]]

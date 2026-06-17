@@ -574,12 +574,6 @@ wheels = [
 ]
 
 [[package]]
-name = "natten"
-version = "0.21.6"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/06/2f/e10aa0edfa2e203fc649a4a52ed9e946decc16824f4740cf61d85a7f9a88/natten-0.21.6.tar.gz", hash = "sha256:c26871225fa533f8a9433ccd4496e3c4dcf6d0e0da369a2f6b547d4321a25dc1", size = 2863866, upload-time = "2026-04-14T18:15:50.885Z" }
-
-[[package]]
 name = "networkx"
 version = "3.6.1"
 source = { registry = "https://download.pytorch.org/whl/cu121" }
@@ -1147,7 +1141,6 @@ dependencies = [
     { name = "jsonargparse" },
     { name = "kornia" },
     { name = "matplotlib" },
-    { name = "natten" },
     { name = "nvmpy" },
     { name = "omegaconf" },
     { name = "open-clip-torch" },
@@ -1166,7 +1159,6 @@ requires-dist = [
     { name = "jsonargparse", specifier = ">=4.49.0" },
     { name = "kornia", specifier = ">=0.8.3" },
     { name = "matplotlib", specifier = ">=3.10.9" },
-    { name = "natten", specifier = ">=0.21.6" },
     { name = "nvmpy", specifier = ">=0.2.4" },
     { name = "omegaconf", specifier = ">=2.3.1" },
     { name = "open-clip-torch", specifier = ">=3.3.0" },
