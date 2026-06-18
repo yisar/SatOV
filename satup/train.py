@@ -11,7 +11,7 @@ from PIL import Image
 
 import open_clip
 
-from model import JAFAR
+from model import SatUp
 
 
 class Cosine_MSE(nn.Module):
@@ -145,7 +145,7 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, scale=2):
         pin_memory=True,
     )
 
-    model = JAFAR(dim=128, v_dim=768).to(device)
+    model = SatUp(dim=128, v_dim=768).to(device)
     clip_feat = CLIPViTFeature(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -180,7 +180,7 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, scale=2):
 
         print(f"Epoch {epoch}: avg loss = {total_loss / len(loader):.4f}")
 
-        torch.save(model.state_dict(), f"jafar_vitb16_{epoch}.pth")
+        torch.save(model.state_dict(), f"satup_vitb16_{epoch}.pth")
 
 
 # =========================
