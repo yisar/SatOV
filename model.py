@@ -7,6 +7,7 @@ import open_clip
 from aaa import GaussianUpsamplerWrapper
 from grid_jbu import GridJBU
 from bench.segearthov import load_featup_upsampler
+from jafar import SatUp
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CLASSNAMES = ["object"]
@@ -56,9 +57,10 @@ class DenseClip(nn.Module):
                 .to(self.device)
                 .eval()
             )
+        elif upsampler == "satup":
+            self.up = SatUp()
         elif upsampler == "gfup":
             self.up = GaussianUpsamplerWrapper()
-
         elif upsampler == "featup":
             hub_model = load_featup_upsampler(device=self.device)
             self.up = lambda g, f: hub_model(g, f)
