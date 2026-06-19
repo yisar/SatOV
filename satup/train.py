@@ -160,13 +160,10 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, scale=2):
             with torch.no_grad():
                 lr_feat = clip_feat(low_res_img)  # (B, 768, new_h/16, new_w/16)
 
-            # ----- 3. JAFAR 前向传播 -----
-            # 输入：低分辨率图像 (112x112) + 低分辨率特征 (例如 4x4)
-            # 目标输出尺寸：与 hr_feat 一致 (14x14)
             pred = model(
-                image=lr_img,
+                image=low_res_img,
                 features=lr_feat,
-                output_size=hr_feat.shape[-2:]  # (14, 14)
+                output_size=hr_feat.shape[-2:]
             )
 
             # ----- 4. 损失计算（直接比较，形状完全一致）-----
