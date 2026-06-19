@@ -73,7 +73,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/img.jpg")
+    parser.add_argument("--filename", type=str, default="./asset/img2.jpg")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument(
         "--stride", type=int, default=112, help="步长，推荐窗口的一半实现重叠"
@@ -114,7 +114,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="gfup")
+    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="satup")
     # print(model)
     model.eval()
 

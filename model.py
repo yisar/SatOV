@@ -4,14 +4,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from aaa import GaussianUpsamplerWrapper
-from grid_jbu import GridJBU
+from satup.gsup import GaussianUpsamplerWrapper
 from bench.segearthov import load_featup_upsampler
-from jafar import SatUp
+from satup.model import SatUp
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CLASSNAMES = ["object"]
 _DEFAULT_TEMPLATES = ["a photo of a {}."]
+
+
+class SatUpWrapper(nn.Module):
+    def __init__(self, device="cuda"):
+        super().__init__()
+        self.device = device
+        self.model = SatUp(dim=128, v_dim=768).to(device)
+        ckpt = torch.load("satup_vitb16_2.pth", map_location=device)
+        self.model.load_state_dict(ckpt, strict=True)
+        self.model.eval()
+
+    @torch.no_grad()
+    def forward(self, guide_lr_img, hr_clip_feat):
+        # hr_clip_feat 才是要传给 model features 的张量
+        out_h, out_w = hr_clip_feat.shape[-2:]
+        pred_feat = self.model(
+            image=guide_lr_img, features=hr_clip_feat, output_size=(out_h, out_w)
+        )
+        return pred_feat
 
 
 class DenseClip(nn.Module):
@@ -58,7 +76,7 @@ class DenseClip(nn.Module):
                 .eval()
             )
         elif upsampler == "satup":
-            self.up = SatUp()
+            self.up = SatUpWrapper(device=self.device)
         elif upsampler == "gfup":
             self.up = GaussianUpsamplerWrapper()
         elif upsampler == "featup":
@@ -186,6 +204,7 @@ class DenseClip(nn.Module):
         # --- 5. 引导上采样 ---
         guide = hr_guide if hr_guide is not None else x
         if self.up is not None:
+            # print(guide, lr_features)
             up_features = self.up(guide, lr_features)
         else:
             up_features = F.interpolate(
