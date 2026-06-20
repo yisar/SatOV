@@ -16,11 +16,14 @@ from timm.models.vision_transformer import VisionTransformer
 from model import SatUp
 from tqdm import tqdm
 
+
 # =========================
 # timm 特征提取器（与原版 JAFAR 的 PretrainedViTWrapper 一致）
 # =========================
 class TimmViTFeature(nn.Module):
-    def __init__(self, model_name="vit_base_patch16_clip_384", device="cuda", norm=True):
+    def __init__(
+        self, model_name="vit_base_patch16_clip_384", device="cuda", norm=True
+    ):
         super().__init__()
         self.model_name = model_name
         self.norm = norm
@@ -37,9 +40,9 @@ class TimmViTFeature(nn.Module):
 
         # 获取数据配置（包括归一化参数和输入尺寸）
         self.data_config = timm.data.resolve_model_data_config(self.model)
-        self.mean = self.data_config['mean']
-        self.std = self.data_config['std']
-        self.input_size = self.data_config['input_size'][-1]  # 通常为 384
+        self.mean = self.data_config["mean"]
+        self.std = self.data_config["std"]
+        self.input_size = self.data_config["input_size"][-1]  # 通常为 384
 
         # 嵌入维度
         self.embed_dim = self.model.embed_dim  # 768
@@ -56,7 +59,7 @@ class TimmViTFeature(nn.Module):
             # 新版 timm (>=0.9.0) 使用 indices
             result = self.model.forward_intermediates(
                 x,
-                indices=[-1],                # 取最后一层
+                indices=[-1],  # 取最后一层
                 return_prefix_tokens=True,
                 norm=self.norm,
                 output_fmt="NCHW",
@@ -112,13 +115,15 @@ class Cosine_MSE(nn.Module):
 class ImageFolderDataset(Dataset):
     def __init__(self, root, mean, std, size=384):
         self.files = sorted(glob.glob(os.path.join(root, "*.jpg")))
-        self.tf = T.Compose([
-            T.Resize((size, size), interpolation=T.InterpolationMode.BICUBIC),
-            T.RandomCrop(size),   # 或保持尺寸，这里用 resize 确保尺寸
-            T.RandomHorizontalFlip(),
-            T.ToTensor(),
-            T.Normalize(mean=mean, std=std)
-        ])
+        self.tf = T.Compose(
+            [
+                T.Resize((size, size), interpolation=T.InterpolationMode.BICUBIC),
+                T.RandomCrop(size),  # 或保持尺寸，这里用 resize 确保尺寸
+                T.RandomHorizontalFlip(),
+                T.ToTensor(),
+                T.Normalize(mean=mean, std=std),
+            ]
+        )
 
     def __len__(self):
         return len(self.files)
@@ -130,7 +135,9 @@ class ImageFolderDataset(Dataset):
 # =========================
 # TRAIN (JAFAR PIPELINE – timm 版本)
 # =========================
-def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="vit_base_patch16_clip_384"):
+def train(
+    data_root, epochs=50, batch_size=4, lr=2e-4, model_name="vit_base_patch16_clip_384"
+):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 初始化特征提取器（先获取归一化参数，以便构建 Dataset）
