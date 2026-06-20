@@ -1,5 +1,7 @@
 import os
 import glob
+import re
+import types
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,9 +10,84 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 from PIL import Image
 from einops import rearrange
-import open_clip
+import timm
+import timm.data
+from timm.models.vision_transformer import VisionTransformer
 from model import SatUp
 from tqdm import tqdm
+
+# =========================
+# timm 特征提取器（与原版 JAFAR 的 PretrainedViTWrapper 一致）
+# =========================
+class TimmViTFeature(nn.Module):
+    def __init__(self, model_name="vit_base_patch16_clip_384", device="cuda", norm=True):
+        super().__init__()
+        self.model_name = model_name
+        self.norm = norm
+        # 加载模型（无分类头，动态尺寸）
+        self.model = timm.create_model(
+            model_name,
+            pretrained=True,
+            num_classes=0,
+            dynamic_img_size=True,
+        )
+        self.model = self.model.to(device).eval()
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        # 获取数据配置（包括归一化参数和输入尺寸）
+        self.data_config = timm.data.resolve_model_data_config(self.model)
+        self.mean = self.data_config['mean']
+        self.std = self.data_config['std']
+        self.input_size = self.data_config['input_size'][-1]  # 通常为 384
+
+        # 嵌入维度
+        self.embed_dim = self.model.embed_dim  # 768
+
+    @torch.no_grad()
+    def forward(self, x):
+        """
+        输入: x (B, 3, H, W)，已经归一化
+        输出: (B, embed_dim, H_patch, W_patch) 最后一层 patch 特征图
+        """
+        # 使用 forward_intermediates 提取最后一层 (n=1)
+        # 注意：新版 timm 可能使用 indices 参数，此处兼容两种写法
+        try:
+            # 新版 timm (>=0.9.0) 使用 indices
+            result = self.model.forward_intermediates(
+                x,
+                indices=[-1],                # 取最后一层
+                return_prefix_tokens=True,
+                norm=self.norm,
+                output_fmt="NCHW",
+                intermediates_only=False,
+            )
+        except TypeError:
+            # 旧版 timm 使用 n
+            result = self.model.forward_intermediates(
+                x,
+                n=1,
+                return_prefix_tokens=True,
+                norm=self.norm,
+                output_fmt="NCHW",
+                intermediates_only=False,
+            )
+        # 解析返回值：可能是 (feats, cls_token) 或只有 feats
+        if isinstance(result, tuple):
+            feats, cls_token = result
+        else:
+            feats = result
+            cls_token = None
+        # feats 可能是列表（因为指定了 indices/n），取第一个
+        if isinstance(feats, list):
+            feats = feats[0]
+        # 如果 output_fmt="NCHW" 未生效，可能返回 (B, L, C)，手动重塑
+        if feats.dim() == 3:
+            B, L, C = feats.shape
+            patch_tokens = feats[:, 1:, :]  # 去掉 CLS
+            H = W = int((L - 1) ** 0.5)
+            feats = patch_tokens.reshape(B, H, W, C).permute(0, 3, 1, 2)
+        return feats
 
 
 # =========================
@@ -30,14 +107,18 @@ class Cosine_MSE(nn.Module):
 
 
 # =========================
-# Dataset (HR only)
+# Dataset (HR only) – 使用 timm 的归一化参数
 # =========================
 class ImageFolderDataset(Dataset):
-    def __init__(self, root):
+    def __init__(self, root, mean, std, size=384):
         self.files = sorted(glob.glob(os.path.join(root, "*.jpg")))
-        self.tf = T.Compose(
-            [T.Resize(256), T.RandomCrop(224), T.RandomHorizontalFlip(), T.ToTensor()]
-        )
+        self.tf = T.Compose([
+            T.Resize((size, size), interpolation=T.InterpolationMode.BICUBIC),
+            T.RandomCrop(size),   # 或保持尺寸，这里用 resize 确保尺寸
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(mean=mean, std=std)
+        ])
 
     def __len__(self):
         return len(self.files)
@@ -47,83 +128,27 @@ class ImageFolderDataset(Dataset):
 
 
 # =========================
-# CLIP extractor (TRUE JAFAR STYLE)
-# ✔ NO manual transformer rewrite
-# ✔ proper hook-style truncation
+# TRAIN (JAFAR PIPELINE – timm 版本)
 # =========================
-class CLIPViTFeature(nn.Module):
-    def __init__(self, device):
-        super().__init__()
-
-        model, _, _ = open_clip.create_model_and_transforms(
-            "ViT-B-16", pretrained="openai"
-        )
-
-        self.visual = model.visual.to(device).eval()
-        for p in self.visual.parameters():
-            p.requires_grad = False
-
-        self.embed_dim = 768
-
-    @torch.no_grad()
-    def forward(self, x):
-        B = x.shape[0]
-
-        # patch embedding
-        x = self.visual.conv1(x)
-        _, _, H, W = x.shape
-
-        x = x.reshape(B, self.embed_dim, -1).permute(0, 2, 1)
-
-        cls = self.visual.class_embedding.to(x.dtype)
-        cls = cls.unsqueeze(0).unsqueeze(1).expand(B, 1, -1)
-
-        x = torch.cat([cls, x], dim=1)
-
-        pos = self.visual.positional_embedding.to(x.dtype)
-        cls_pos = pos[:1]
-        patch_pos = pos[1:].reshape(1, 14, 14, 768).permute(0, 3, 1, 2)
-        patch_pos = F.interpolate(patch_pos, size=(H, W), mode="bilinear")
-        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(-1, 768)
-
-        x = x + torch.cat([cls_pos, patch_pos], dim=0).unsqueeze(0)
-
-        x = self.visual.ln_pre(x)
-
-        # =========================
-        # ✔ TRUE JAFAR CUT POINT
-        # (before last block)
-        # =========================
-        x = x.permute(1, 0, 2)
-
-        for blk in self.visual.transformer.resblocks[:-1]:
-            x = blk(x)
-
-        x = x.permute(1, 0, 2)
-
-        patch = x[:, 1:, :]
-
-        # ✔ correct spatial size from conv
-        hw = int(H)  # conv feature already gives correct grid
-
-        feat = patch.reshape(B, hw, hw, self.embed_dim)
-        feat = feat.permute(0, 3, 1, 2)
-
-        return feat
-
-
-# =========================
-# TRAIN (TRUE JAFAR PIPELINE)
-# =========================
-def train(data_root, epochs=50, batch_size=4, lr=2e-4):
+def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="vit_base_patch16_clip_384"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    dataset = ImageFolderDataset(data_root)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # 初始化特征提取器（先获取归一化参数，以便构建 Dataset）
+    # 这里先临时创建一个实例以获取 mean/std，但我们后续会复用
+    tmp_extractor = TimmViTFeature(model_name=model_name, device=device)
+    mean = tmp_extractor.mean
+    std = tmp_extractor.std
+    size = tmp_extractor.input_size
 
-    model = SatUp(dim=128, v_dim=768).to(device)
-    clip = CLIPViTFeature(device)
+    # 构建数据集和数据加载器
+    dataset = ImageFolderDataset(data_root, mean, std, size)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
+    # 创建模型和特征提取器（正式使用）
+    model = SatUp(dim=128, v_dim=tmp_extractor.embed_dim).to(device)
+    clip_extractor = TimmViTFeature(model_name=model_name, device=device)
+
+    # 优化器和损失
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = Cosine_MSE().to(device)
 
@@ -134,39 +159,39 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4):
         for hr in pbar:
             hr = hr.to(device)
 
-            # =========================
-            # HR feature (target)
-            # =========================
+            # 1. HR feature (target)
             with torch.no_grad():
-                hr_feat = clip(hr)
+                hr_feat = clip_extractor(hr)
 
-            # =========================
-            # JAFAR LR generation (CORRECT)
-            # =========================
+            # 2. 生成固定 0.5 倍下采样图 → Query
+            query_img = F.interpolate(
+                hr, scale_factor=0.5, mode="bicubic", align_corners=False
+            )
+            _, _, qh, qw = query_img.shape
+            qh = (qh // 16) * 16
+            qw = (qw // 16) * 16
+            if qh > 0 and qw > 0:
+                query_img = F.interpolate(query_img, size=(qh, qw), mode="bicubic")
+
+            # 3. 生成随机低分辨率图 (0.25~0.5) → 用于提取 LR 特征 (KV)
             scale = np.random.uniform(0.25, 0.5)
-
-            lr = F.interpolate(
+            kv_img = F.interpolate(
                 hr, scale_factor=scale, mode="bicubic", align_corners=False
             )
+            _, _, kh, kw = kv_img.shape
+            kh = (kh // 16) * 16
+            kw = (kw // 16) * 16
+            if kh > 0 and kw > 0:
+                kv_img = F.interpolate(kv_img, size=(kh, kw), mode="bicubic")
 
-            # ensure patch alignment (CRITICAL)
-            _, _, h, w = lr.shape
-            h = (h // 16) * 16
-            w = (w // 16) * 16
-            lr = F.interpolate(lr, size=(h, w), mode="bicubic")
-
-            # =========================
-            # LR feature (key/value)
-            # =========================
+            # 4. 提取 LR 特征 (Key/Value)
             with torch.no_grad():
-                lr_feat = clip(lr)
+                lr_feat = clip_extractor(kv_img)
 
-            # =========================
-            # JAFAR forward
-            # =========================
+            # 5. JAFAR 前向
             pred = model(
-                image=lr,  # query = HR
-                features=lr_feat,  # KV = LR
+                image=query_img,
+                features=lr_feat,
                 output_size=hr_feat.shape[-2:],
             )
 
@@ -191,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--model_name", type=str, default="vit_base_patch16_clip_384")
 
     args = parser.parse_args()
 
@@ -199,4 +225,5 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        model_name=args.model_name,
     )

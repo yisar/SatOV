@@ -5,192 +5,246 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 from PIL import Image
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-import open_clip
+import numpy as np
+import timm
 
+# 假设 SatUp 定义在 model.py 中（请确保该文件存在）
 from model import SatUp
 
 
 # =========================
-# CLIP (JAFAR aligned: CUT at layer 11 → input of layer 12)
+# PCA 辅助类与函数（支持 GPU）
 # =========================
-class CLIPViTFeature(torch.nn.Module):
-    def __init__(self, device):
-        super().__init__()
+class TorchPCA:
+    """基于 PyTorch 的 PCA，支持 GPU"""
 
-        model, _, _ = open_clip.create_model_and_transforms(
-            "ViT-B-16", pretrained="openai"
+    def __init__(self, n_components):
+        self.n_components = n_components
+
+    def fit(self, X):
+        self.mean_ = X.mean(dim=0)
+        unbiased = X - self.mean_.unsqueeze(0)
+        U, S, V = torch.pca_lowrank(
+            unbiased, q=self.n_components, center=False, niter=4
+        )
+        self.components_ = V.T
+        self.singular_values_ = S
+        return self
+
+    def transform(self, X):
+        t0 = X - self.mean_.unsqueeze(0)
+        projected = t0 @ self.components_.T
+        return projected
+
+
+def pca(image_feats_list, dim=3, fit_pca=None, use_torch_pca=True, max_samples=None):
+    """
+    对一组特征图进行 PCA 降维，所有特征共享同一个投影空间。
+    image_feats_list: list of (B, C, H, W) tensors
+    返回降维后的列表，每个形状为 (B, 3, H, W)，值已归一化到 [0,1]
+    """
+    device = image_feats_list[0].device
+
+    def flatten(tensor, target_size=None):
+        if target_size is not None and fit_pca is None:
+            tensor = F.interpolate(tensor, (target_size, target_size), mode="area")
+        B, C, H, W = tensor.shape
+        return (
+            tensor.permute(1, 0, 2, 3)
+            .reshape(C, B * H * W)
+            .permute(1, 0)
+            .detach()
+            .cpu()
         )
 
-        self.visual = model.visual.to(device)
-        self.visual.eval()
+    # 统一空间尺寸（若 fit_pca 为 None，则用第一个特征图的空间尺寸作为目标）
+    if len(image_feats_list) > 1 and fit_pca is None:
+        target_size = image_feats_list[0].shape[2]
+    else:
+        target_size = None
 
-        for p in self.visual.parameters():
-            p.requires_grad = False
+    flattened_feats = []
+    for feats in image_feats_list:
+        flattened_feats.append(flatten(feats, target_size))
+    x = torch.cat(flattened_feats, dim=0)
 
-        self.embed_dim = 768
-        self.device = device
+    if max_samples is not None and x.shape[0] > max_samples:
+        indices = torch.randperm(x.shape[0])[:max_samples]
+        x = x[indices]
 
-    @torch.no_grad()
-    def forward(self, x):
-        B = x.shape[0]
+    if fit_pca is None:
+        if use_torch_pca:
+            fit_pca = TorchPCA(n_components=dim).fit(x)
+        else:
+            from sklearn.decomposition import PCA as SklearnPCA
 
-        # --------------------
-        # patch embedding
-        # --------------------
-        x = self.visual.conv1(x)  # (B, 768, H/16, W/16)
-        H, W = x.shape[-2:]
+            fit_pca = SklearnPCA(n_components=dim).fit(x)
 
-        x = x.flatten(2).transpose(1, 2)  # (B, N, C)
-
-        # --------------------
-        # CLS token
-        # --------------------
-        cls = self.visual.class_embedding.to(x.dtype)
-        cls = cls.unsqueeze(0).unsqueeze(1).expand(B, 1, -1)
-
-        x = torch.cat([cls, x], dim=1)
-
-        # --------------------
-        # positional embedding (JAFAR style)
-        # --------------------
-        pos = self.visual.positional_embedding.to(x.dtype)
-
-        cls_pos = pos[:1]
-        patch_pos = pos[1:]
-
-        old_grid = int(patch_pos.shape[0] ** 0.5)
-
-        patch_pos = patch_pos.reshape(1, old_grid, old_grid, -1).permute(0, 3, 1, 2)
-
-        patch_pos = F.interpolate(
-            patch_pos, size=(H, W), mode="bicubic", align_corners=False
-        )
-
-        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(-1, self.embed_dim)
-
-        pos = torch.cat([cls_pos, patch_pos], dim=0)
-
-        x = x + pos.unsqueeze(0)
-
-        x = self.visual.ln_pre(x)
-
-        # =========================
-        # ✔ JAFAR CORE FIX
-        # STOP: BEFORE LAYER 12
-        # i.e. OUTPUT OF BLOCK 11
-        # =========================
-        x = x.permute(1, 0, 2)
-
-        for i, blk in enumerate(self.visual.transformer.resblocks):
-            if i == 11:  # ⭐第12层输入（0-based）
-                break
-            x = blk(x)
-
-        x = x.permute(1, 0, 2)
-
-        patch = x[:, 1:, :]
-
-        hw = int(patch.shape[1] ** 0.5)
-
-        feat = patch.reshape(B, hw, hw, self.embed_dim)
-        feat = feat.permute(0, 3, 1, 2).contiguous()
-
-        return feat
+    reduced_feats = []
+    for feats in image_feats_list:
+        x_red = fit_pca.transform(flatten(feats))
+        if isinstance(x_red, np.ndarray):
+            x_red = torch.from_numpy(x_red)
+        x_red -= x_red.min(dim=0, keepdim=True).values
+        x_red /= x_red.max(dim=0, keepdim=True).values + 1e-8
+        B, C, H, W = feats.shape
+        reduced = x_red.reshape(B, H, W, dim).permute(0, 3, 1, 2).to(device)
+        reduced_feats.append(reduced)
+    return reduced_feats, fit_pca
 
 
 # =========================
-# PCA visualization
+# timm CLIP 特征提取器
 # =========================
-def feature_to_rgb(feat):
-    C, H, W = feat.shape
-    feat = feat.reshape(C, -1).T
+def load_clip_model(model_name="vit_base_patch16_clip_224"):
+    model = timm.create_model(
+        model_name,
+        pretrained=True,
+        num_classes=0,
+        dynamic_img_size=True,
+    )
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+    return model
 
-    pca = PCA(n_components=3)
-    feat = pca.fit_transform(feat)
 
-    feat -= feat.min(0)
-    feat /= feat.max(0) + 1e-8
+def get_preprocess(model_name="vit_base_patch16_clip_224"):
+    data_config = timm.data.resolve_model_data_config(model_name)
+    mean = data_config["mean"]
+    std = data_config["std"]
+    size = data_config["input_size"][-1]
+    return mean, std, size
 
-    return feat.reshape(H, W, 3)
+
+@torch.no_grad()
+def extract_features(model, image_tensor, layer_index=10, norm=True):
+    """
+    提取指定层的 patch 特征，返回 (B, C, H, W) 形状。
+    layer_index: 默认为 10，即第 11 个 block 的输出（Layer 12 的输入）
+    """
+    result = model.forward_intermediates(
+        image_tensor,
+        indices=[layer_index],
+        return_prefix_tokens=True,
+        norm=norm,
+        output_fmt="NCHW",
+        intermediates_only=False,
+    )
+    if isinstance(result, tuple):
+        feats, cls_token = result
+    else:
+        feats = result
+        cls_token = None
+
+    if isinstance(feats, list):
+        feats = feats[0]
+
+    # 若返回的是序列 (B, L, C)，去掉 cls 并重塑为 (B, C, H, W)
+    if feats.dim() == 3:
+        B, L, C = feats.shape
+        patch_tokens = feats[:, 1:, :]  # 去掉 cls
+        H = W = int((L - 1) ** 0.5)
+        feats = patch_tokens.reshape(B, H, W, C).permute(0, 3, 1, 2)
+    return feats
 
 
 # =========================
-# main
+# 主程序
 # =========================
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.save_dir, exist_ok=True)
 
+    # 1. 加载 timm CLIP 模型
+    model_name = "vit_base_patch16_clip_224"
+    clip_model = load_clip_model(model_name).to(device)
+    mean, std, _ = get_preprocess(model_name)
+
+    # 2. 读取并预处理图像
     img = Image.open(args.image).convert("RGB")
+    # 原始 Tensor (0-1)，用于显示和输入 SatUp（SatUp 期望原始像素值）
+    hr_orig = T.ToTensor()(img).unsqueeze(0)  # (1,3,H,W)
+    hr_orig = F.interpolate(hr_orig, (224, 224), mode="bilinear")
+    lr_orig = F.interpolate(hr_orig, scale_factor=0.5, mode="bicubic")
 
-    hr = T.ToTensor()(img).unsqueeze(0)
-    hr = F.interpolate(hr, (224, 224), mode="bilinear")
+    # 归一化后输入 CLIP
+    normalize = T.Normalize(mean=mean, std=std)
+    hr_norm = normalize(hr_orig.clone())
+    lr_norm = normalize(lr_orig.clone())
+    hr_norm, lr_norm = hr_norm.to(device), lr_norm.to(device)
 
-    lr = F.interpolate(hr, scale_factor=0.5, mode="bicubic")
+    # 3. 提取特征 (第 10 层输出)
+    hr_feat = extract_features(clip_model, hr_norm, layer_index=10)  # (1, 768, 14, 14)
+    lr_feat = extract_features(clip_model, lr_norm, layer_index=10)  # (1, 768, 7, 7)
 
-    hr, lr = hr.to(device), lr.to(device)
+    print("HR feature shape:", hr_feat.shape)
+    print("LR feature shape:", lr_feat.shape)
 
-    clip = CLIPViTFeature(device)
+    # 4. 加载 SatUp 并预测
     model = SatUp(dim=128, v_dim=768).to(device)
-
     model.load_state_dict(torch.load(args.weight, map_location=device))
     model.eval()
 
     with torch.no_grad():
-        # ✔ GT feature (layer 12 input)
-        hr_feat = clip(hr)
-
-        # ✔ LR feature (same extractor)
-        lr_feat = clip(lr)
-
-        pred = model(image=lr, features=lr_feat, output_size=hr_feat.shape[-2:])
-
-        pred_vis = F.interpolate(
-            pred, size=(224, 224), mode="bilinear", align_corners=False
+        # SatUp 输入为 LR 原始图像（0-1）和 LR 特征，输出目标尺寸的特征
+        pred = model(
+            image=lr_orig.to(device), features=lr_feat, output_size=hr_feat.shape[-2:]
+        )
+        # 将预测特征上采样到与 HR 特征相同尺寸（用于可视化对比，若原始输出尺寸即匹配则无需插值）
+        pred_up = F.interpolate(
+            pred, size=hr_feat.shape[-2:], mode="bilinear", align_corners=False
         )
 
-    hr_img = hr[0].permute(1, 2, 0).cpu().numpy()
-    lr_img = lr[0].permute(1, 2, 0).cpu().numpy()
+    # 5. 生成对比所需的数据
+    # 5a. LR 特征双线性上采样（简单插值基线）
+    lr_feat_up = F.interpolate(lr_feat, size=hr_feat.shape[-2:], mode="bilinear")
 
-    hr_vis = feature_to_rgb(hr_feat[0].cpu())
-    pred_vis = feature_to_rgb(pred_vis[0].cpu())
+    # 5b. 共享 PCA 降维（GT, Pred, LR_up）
+    feats_for_pca = [hr_feat, pred_up, lr_feat_up]  # 三者尺寸均为 (1,768,14,14)
+    reduced, _ = pca(feats_for_pca, dim=3, use_torch_pca=True)
+    hr_pca = reduced[0].squeeze(0).permute(1, 2, 0).cpu().numpy()
+    pred_pca = reduced[1].squeeze(0).permute(1, 2, 0).cpu().numpy()
+    lr_up_pca = reduced[2].squeeze(0).permute(1, 2, 0).cpu().numpy()
 
-    plt.figure(figsize=(10, 10))
+    # 5c. 图像显示准备
+    hr_display = hr_orig.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    lr_display = lr_orig.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    lr_bicubic = F.interpolate(lr_orig, size=hr_orig.shape[-2:], mode="bicubic")
+    lr_bicubic_display = lr_bicubic.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
-    plt.subplot(2, 2, 1)
-    plt.imshow(hr_img)
-    plt.title("HR image")
-    plt.axis("off")
+    # 6. 2行×3列 可视化布局
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
-    plt.subplot(2, 2, 2)
-    plt.imshow(lr_img)
-    plt.title("LR image")
-    plt.axis("off")
+    # 第一行：图像
+    axes[0, 0].imshow(hr_display)
+    axes[0, 0].set_title("HR image (224×224)")
+    axes[0, 1].imshow(lr_bicubic_display)
+    axes[0, 1].set_title("LR bicubic upsampled")
+    axes[0, 2].imshow(lr_display)
+    axes[0, 2].set_title("LR original (112×112)")
 
-    plt.subplot(2, 2, 3)
-    plt.imshow(hr_vis)
-    plt.title("GT feature (Layer 12 input)")
-    plt.axis("off")
+    # 第二行：特征（PCA 伪彩色）
+    axes[1, 0].imshow(hr_pca)
+    axes[1, 0].set_title("GT feature")
+    axes[1, 1].imshow(pred_pca)
+    axes[1, 1].set_title("Pred feature (SatUp)")
+    axes[1, 2].imshow(lr_up_pca)
+    axes[1, 2].set_title("LR feat up (bilinear)")
 
-    plt.subplot(2, 2, 4)
-    plt.imshow(pred_vis)
-    plt.title("Pred feature")
-    plt.axis("off")
-
+    for ax in axes.flat:
+        ax.axis("off")
     plt.tight_layout()
-    save_path = os.path.join(args.save_dir, "result.png")
+    save_path = os.path.join(args.save_dir, "result_timm_upsample.png")
     plt.savefig(save_path, dpi=300)
     plt.show()
-
     print("saved:", save_path)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", type=str, default="asset/6829.png")
-    parser.add_argument("--weight", type=str, default="satup_21.pth")
+    parser.add_argument("--image", type=str, default="asset/parrot.png")
+    parser.add_argument("--weight", type=str, default="satup_12.pth")
     parser.add_argument("--save_dir", type=str, default="results")
     args = parser.parse_args()
-
     main(args)
