@@ -17,7 +17,7 @@ class SatUpWrapper(nn.Module):
     def __init__(self, device="cuda"):
         super().__init__()
         self.device = device
-        self.model = SatUp(dim=256, v_dim=768).to(device)
+        self.model = SatUp(dim=128, v_dim=768).to(device)
         ckpt = torch.load("satup_14.pth", map_location=device)
         self.model.load_state_dict(ckpt, strict=True)
         self.model.eval()

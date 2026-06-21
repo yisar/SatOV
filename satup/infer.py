@@ -3,13 +3,14 @@ import argparse
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-import timm
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+import open_clip
 from model import SatUp
 
 
@@ -27,7 +28,7 @@ class FixedPCA:
         U, S, V = torch.pca_lowrank(Xc, q=self.n_components, center=False)
         self.components_ = V[:, :self.n_components]
 
-        # sign fix (very important for stable color)
+        # sign fix for stability
         for i in range(self.components_.shape[1]):
             if self.components_[:, i].sum() < 0:
                 self.components_[:, i] *= -1
@@ -38,17 +39,11 @@ class FixedPCA:
         return (X - self.mean_) @ self.components_
 
 
-# =========================
-# flatten feature map
-# =========================
 def flatten_feat(feat):
     B, C, H, W = feat.shape
     return feat.permute(0, 2, 3, 1).reshape(-1, C).detach().cpu()
 
 
-# =========================
-# PCA with GT anchor
-# =========================
 def stable_pca(gt_feat, pred_feat, lr_feat):
     X = flatten_feat(gt_feat)
     pca = FixedPCA(3).fit(X)
@@ -57,7 +52,6 @@ def stable_pca(gt_feat, pred_feat, lr_feat):
         x = flatten_feat(feat)
         x = pca.transform(x)
 
-        # stable normalization
         x = x - x.min(dim=0, keepdim=True).values
         x = x / (x.max(dim=0, keepdim=True).values + 1e-8)
 
@@ -68,44 +62,95 @@ def stable_pca(gt_feat, pred_feat, lr_feat):
 
 
 # =========================
-# CLIP feature extractor
+# ClearCLIP Feature Extractor
 # =========================
-@torch.no_grad()
-def extract_clip_feat(model, img):
-    result = model.forward_intermediates(
-        img,
-        indices=[-1],
-        return_prefix_tokens=True,
-        norm=True,
-        output_fmt="NCHW",
-        intermediates_only=False,
-    )
+class ClearCLIPFeature(nn.Module):
+    def __init__(self, model_name="ViT-B-16", device="cuda"):
+        super().__init__()
+        self.device = device
 
-    feats = result[0] if isinstance(result, tuple) else result
+        model, _, _ = open_clip.create_model_and_transforms(
+            model_name,
+            pretrained="openai",
+            device=device
+        )
 
-    if isinstance(feats, list):
-        feats = feats[0]
+        self.visual = model.visual.eval()
 
-    if feats.dim() == 3:
-        B, L, C = feats.shape
-        H = W = int((L - 1) ** 0.5)
-        feats = feats[:, 1:].reshape(B, H, W, C).permute(0, 3, 1, 2)
+        for p in self.visual.parameters():
+            p.requires_grad = False
 
-    return feats
+        self.embed_dim = self.visual.conv1.out_channels
 
+    @torch.no_grad()
+    def forward(self, x):
+        B, C, H, W = x.shape
 
-# =========================
-# model loader
-# =========================
-def load_clip():
-    model = timm.create_model(
-        "vit_base_patch16_clip_384",
-        pretrained=True,
-        num_classes=0,
-        dynamic_img_size=True,
-    )
-    model.eval()
-    return model
+        x = self.visual.conv1(x)
+        grid_h, grid_w = x.shape[-2:]
+
+        x_tokens = x.flatten(2).transpose(1, 2)
+
+        cls_token = self.visual.class_embedding.to(x_tokens.dtype)
+        pos_embed = self.visual.positional_embedding.to(x_tokens.dtype)
+
+        cls_pos = pos_embed[:1]
+        patch_pos = pos_embed[1:]
+
+        old_grid = int(patch_pos.shape[0] ** 0.5)
+
+        if old_grid != grid_h or old_grid != grid_w:
+            patch_pos = patch_pos.reshape(1, old_grid, old_grid, -1).permute(0, 3, 1, 2)
+            patch_pos = F.interpolate(
+                patch_pos, size=(grid_h, grid_w),
+                mode="bicubic",
+                align_corners=False
+            )
+            patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, grid_h * grid_w, -1)
+            pos_embed = torch.cat([cls_pos, patch_pos.squeeze(0)], dim=0)
+
+        x_tokens = torch.cat(
+            [cls_token.unsqueeze(0).expand(B, 1, -1), x_tokens],
+            dim=1
+        )
+
+        x_tokens = x_tokens + pos_embed
+        x_tokens = self.visual.ln_pre(x_tokens)
+
+        blocks = self.visual.transformer.resblocks
+        for i in range(len(blocks) - 1):
+            x_tokens = blocks[i](x_tokens)
+
+        last = blocks[-1]
+
+        x = last.ln_1(x_tokens)
+        attn = last.attn
+
+        qkv = F.linear(x, attn.in_proj_weight, attn.in_proj_bias)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        B, N, D = q.shape
+        heads = attn.num_heads
+        dim_head = D // heads
+
+        q = q.view(B, N, heads, dim_head).transpose(1, 2)
+        v = v.view(B, N, heads, dim_head).transpose(1, 2)
+
+        attn_map = (q @ q.transpose(-2, -1)) * (dim_head ** -0.5)
+        attn_map = attn_map.softmax(dim=-1)
+
+        out = (attn_map @ v).transpose(1, 2).reshape(B, N, D)
+
+        out = F.linear(out, attn.out_proj.weight, attn.out_proj.bias)
+        out = self.visual.ln_post(out)
+
+        cls = out[:, :1]
+        patch = out[:, 1:]
+        patch = patch - cls
+
+        feat = patch.permute(0, 2, 1).reshape(B, D, grid_h, grid_w)
+
+        return feat
 
 
 # =========================
@@ -116,47 +161,48 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(args.save_dir, exist_ok=True)
 
-    clip = load_clip().to(device)
+    clip_encoder = ClearCLIPFeature(
+        model_name="ViT-B-16",
+        device=device
+    ).to(device)
 
-    config = timm.data.resolve_model_data_config("vit_base_patch16_clip_384")
-    mean, std, size = config["mean"], config["std"], config["input_size"][-1]
+    clip_encoder.eval()
 
     # image
     img = Image.open(args.image).convert("RGB")
 
-    hr = T.ToTensor()(img).unsqueeze(0)
-    hr = F.interpolate(hr, (size, size), mode="bilinear")
+    hr = T.ToTensor()(img).unsqueeze(0).to(device)
+    hr = F.interpolate(hr, (args.output_size, args.output_size), mode="bilinear")
 
     lr = F.interpolate(hr, scale_factor=0.5, mode="bicubic")
 
-    norm = T.Normalize(mean, std)
+    # features (ALL via ClearCLIP)
+    gt_feat = clip_encoder(hr)
+    lr_feat = clip_encoder(lr)
 
-    hr_n = norm(hr.clone()).to(device)
-    lr_n = norm(lr.clone()).to(device)
-
-    # features
-    gt_feat = extract_clip_feat(clip, hr_n)
-    lr_feat = extract_clip_feat(clip, lr_n)
-
-    satup = SatUp(dim=256, v_dim=768).to(device)
+    satup = SatUp(dim=128, v_dim=768).to(device)
     satup.load_state_dict(torch.load(args.weight, map_location=device))
     satup.eval()
 
     with torch.no_grad():
-        pred_feat = satup(lr.to(device), lr_feat, (args.output_size, args.output_size))
+        pred_feat = satup(
+            lr,
+            lr_feat,
+            (args.output_size, args.output_size)
+        )
 
-    # upsample LR for comparison
+    # upsample for comparison
     lr_feat_up = F.interpolate(lr_feat, (args.output_size, args.output_size), mode="nearest")
     gt_feat_up = F.interpolate(gt_feat, (args.output_size, args.output_size), mode="bilinear")
 
-    # PCA (IMPORTANT FIX)
+    # PCA
     gt_pca, pred_pca, lr_pca = stable_pca(gt_feat_up, pred_feat, lr_feat_up)
 
-    # convert to numpy
-    img_np = hr[0].permute(1, 2, 0).cpu().numpy()
-    gt_np = gt_pca[0].permute(1, 2, 0).cpu().numpy()
-    pred_np = pred_pca[0].permute(1, 2, 0).cpu().numpy()
-    lr_np = lr_pca[0].permute(1, 2, 0).cpu().numpy()
+    # to numpy
+    img_np = hr[0].permute(1, 2, 0).detach().cpu().numpy()
+    gt_np = gt_pca[0].permute(1, 2, 0).detach().cpu().numpy()
+    pred_np = pred_pca[0].permute(1, 2, 0).detach().cpu().numpy()
+    lr_np = lr_pca[0].permute(1, 2, 0).detach().cpu().numpy()
 
     # plot
     fig, ax = plt.subplots(1, 4, figsize=(18, 5))
@@ -165,7 +211,7 @@ def main(args):
     ax[0].set_title("Image")
 
     ax[1].imshow(gt_np)
-    ax[1].set_title("GT (stable PCA)")
+    ax[1].set_title("GT (ClearCLIP PCA)")
 
     ax[2].imshow(pred_np)
     ax[2].set_title("SatUp")
@@ -178,7 +224,7 @@ def main(args):
 
     plt.tight_layout()
 
-    save_path = Path(args.save_dir) / f"stable_pca_{args.output_size}.png"
+    save_path = Path(args.save_dir) / f"clearclip_pca_{args.output_size}.png"
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
@@ -190,7 +236,7 @@ def main(args):
 # =========================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="asset/parrot.png")
+    parser.add_argument("--image", default="asset/P0016654.jpg")
     parser.add_argument("--weight", default="satup_14.pth")
     parser.add_argument("--save_dir", default="results")
     parser.add_argument("--output_size", type=int, default=224)

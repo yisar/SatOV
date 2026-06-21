@@ -5,6 +5,22 @@ from einops import rearrange
 
 from torch import einsum
 
+class SimpleSatUp(nn.Module):
+    def __init__(self, dim=128, v_dim=768):
+        super().__init__()
+        self.encoder = nn.Conv2d(3, dim, 3, padding=1)
+        self.cross_attn = nn.MultiheadAttention(dim, num_heads=4, batch_first=True)
+        self.output = nn.Conv2d(dim, v_dim, 1)
+        
+    def forward(self, image, features, output_size):
+        x = self.encoder(image)
+        x = F.adaptive_avg_pool2d(x, output_size)
+        B, C, H, W = x.shape
+        x = x.view(B, C, H*W).permute(0, 2, 1)
+        f = features.view(B, features.size(1), -1).permute(0, 2, 1)
+        out, _ = self.cross_attn(x, f, f)
+        out = out.permute(0, 2, 1).view(B, -1, H, W)
+        return self.output(out)
 
 def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
     # Create a grid of coordinates
@@ -119,27 +135,37 @@ def encoder(
 class CrossAttention(nn.Module):
     def __init__(self, query_dim, key_dim, value_dim, num_heads):
         super().__init__()
-        self.norm_q = nn.RMSNorm(query_dim)
-        self.norm_k = nn.RMSNorm(key_dim)
-        self.norm_v = nn.RMSNorm(value_dim)
-        self.attention = nn.MultiheadAttention(
-            embed_dim=query_dim,
-            vdim=value_dim,
-            num_heads=num_heads,
-            dropout=0.0,
-            batch_first=True,
-        )
+        self.num_heads = num_heads
+        self.head_dim = query_dim // num_heads
+        
+        self.norm_q = nn.LayerNorm(query_dim)
+        self.norm_k = nn.LayerNorm(key_dim)
+        self.norm_v = nn.LayerNorm(value_dim)
+        
+        self.q_proj = nn.Linear(query_dim, query_dim)
+        self.k_proj = nn.Linear(key_dim, query_dim)
+        self.v_proj = nn.Linear(value_dim, query_dim)
+        self.out_proj = nn.Linear(query_dim, value_dim)  # 128 -> 768
 
     def forward(self, query, key, value):
-        query = self.norm_q(query)
-        key = self.norm_k(key)
-
-        _, attn_scores = self.attention(
-            query, key, self.norm_v(value), average_attn_weights=True
-        )
-        attn_output = einsum("b i j, b j d -> b i d", attn_scores, value)
-
-        return attn_output, attn_scores
+        B, N_q, _ = query.shape
+        _, N_k, _ = key.shape
+        
+        q = self.q_proj(self.norm_q(query))
+        k = self.k_proj(self.norm_k(key))
+        v = self.v_proj(self.norm_v(value))
+        
+        q = q.view(B, N_q, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        attn = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn = attn.softmax(dim=-1)
+        
+        out = (attn @ v).transpose(1, 2).reshape(B, N_q, -1)
+        out = self.out_proj(out)  # 投影回 768
+        
+        return out, attn
 
 
 class CrossAttentionBlock(nn.Module):
@@ -208,6 +234,7 @@ class SFT(nn.Module):
         self.beta = nn.Conv2d(
             in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
         )
+        
         self.norm = nn.GroupNorm(num_groups=8, num_channels=in_channels, affine=False)
 
     def forward(self, image, features):
@@ -221,10 +248,8 @@ class SatUp(nn.Module):
         self,
         dim=128,
         v_dim=384,
-        feature_dim=None,
-        kernel_size=1,
+        kernel_size=3,
         num_heads=4,
-        **kwargs,
     ):
         super().__init__()
 
@@ -264,6 +289,7 @@ class SatUp(nn.Module):
         keys = self.sft_key(
             keys, self.key_features_encoder(F.normalize(features, dim=1))
         )
+        # keys = self.sft_key(keys, self.key_features_encoder(features))
 
         # Values
         values = features
