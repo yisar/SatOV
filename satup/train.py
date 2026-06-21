@@ -197,22 +197,6 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="ViT-B-16"):
                 image=query_img, features=lr_feat, output_size=hr_feat.shape[-2:]
             )
 
-            # pred_flat = rearrange(pred, "b c h w -> (b h w) c")
-            # target_flat = rearrange(hr_feat, "b c h w -> (b h w) c")
-
-            # cos_sim = F.cosine_similarity(pred_flat, target_flat, dim=1).mean()
-
-            # print(
-            #     "pred:",
-            #     pred.mean().item(),
-            #     pred.std().item(),
-            #     "| target:",
-            #     hr_feat.mean().item(),
-            #     hr_feat.std().item(),
-            #     "| cos_sim:",
-            #     cos_sim.item()
-            # )
-
             loss = loss_fn(pred, hr_feat)
 
             opt.zero_grad()

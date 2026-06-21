@@ -18,7 +18,7 @@ class SatUpWrapper(nn.Module):
         super().__init__()
         self.device = device
         self.model = SatUp(dim=128, v_dim=768).to(device)
-        ckpt = torch.load("satup_14.pth", map_location=device)
+        ckpt = torch.load("satup_22.pth", map_location=device)
         self.model.load_state_dict(ckpt, strict=True)
         self.model.eval()
 

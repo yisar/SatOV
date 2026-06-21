@@ -236,8 +236,8 @@ def main(args):
 # =========================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="asset/P0016654.jpg")
-    parser.add_argument("--weight", default="satup_14.pth")
+    parser.add_argument("--image", default="asset/img.jpg")
+    parser.add_argument("--weight", default="satup_22.pth")
     parser.add_argument("--save_dir", default="results")
     parser.add_argument("--output_size", type=int, default=224)
 
