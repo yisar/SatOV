@@ -17,8 +17,8 @@ class SatUpWrapper(nn.Module):
     def __init__(self, device="cuda"):
         super().__init__()
         self.device = device
-        self.model = SatUp(dim=128, v_dim=768).to(device)
-        ckpt = torch.load("satup_vitb16_2.pth", map_location=device)
+        self.model = SatUp(dim=256, v_dim=768).to(device)
+        ckpt = torch.load("satup_49.pth", map_location=device)
         self.model.load_state_dict(ckpt, strict=True)
         self.model.eval()
 
@@ -204,7 +204,6 @@ class DenseClip(nn.Module):
         # --- 5. 引导上采样 ---
         guide = hr_guide if hr_guide is not None else x
         if self.up is not None:
-            # print(guide, lr_features)
             up_features = self.up(guide, lr_features)
         else:
             up_features = F.interpolate(

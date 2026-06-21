@@ -152,7 +152,7 @@ def train(
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     # 创建模型和特征提取器（正式使用）
-    model = SatUp(dim=128, v_dim=tmp_extractor.embed_dim).to(device)
+    model = SatUp(dim=256, v_dim=tmp_extractor.embed_dim).to(device)
     clip_extractor = TimmViTFeature(model_name=model_name, device=device)
 
     # 优化器和损失

@@ -138,7 +138,7 @@ def main(args):
     gt_feat = extract_clip_feat(clip, hr_n)
     lr_feat = extract_clip_feat(clip, lr_n)
 
-    satup = SatUp(dim=128, v_dim=768).to(device)
+    satup = SatUp(dim=256, v_dim=768).to(device)
     satup.load_state_dict(torch.load(args.weight, map_location=device))
     satup.eval()
 
@@ -190,8 +190,8 @@ def main(args):
 # =========================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="asset/img2.jpg")
-    parser.add_argument("--weight", default="satup_47.pth")
+    parser.add_argument("--image", default="asset/parrot.png")
+    parser.add_argument("--weight", default="satup_49.pth")
     parser.add_argument("--save_dir", default="results")
     parser.add_argument("--output_size", type=int, default=224)
 
