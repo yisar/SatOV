@@ -114,7 +114,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="satup")
+    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="anyup")
     # print(model)
     model.eval()
 
