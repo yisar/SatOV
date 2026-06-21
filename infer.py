@@ -73,7 +73,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="asset/img3.jpg")
+    parser.add_argument("--filename", type=str, default="asset/img.jpg")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument(
         "--stride", type=int, default=112, help="步长，推荐窗口的一半实现重叠"
@@ -181,7 +181,7 @@ def main():
         probs_np = full_probs.cpu().numpy()
 
         # 2. 执行全局 Dense CRF 优化 (核心步骤)
-        # print(">>> 正在运行全局 Dense CRF 优化，请稍候...")
+        print(">>> 正在运行全局 Dense CRF 优化，请稍候...")
         probs_np = apply_dense_crf(img_np, probs_np)
 
         # 3. 最终类别判定

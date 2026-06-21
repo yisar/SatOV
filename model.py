@@ -23,13 +23,11 @@ class DenseClip(nn.Module):
         jit: bool = False,
         only_clear: bool = False,
         upsampler: str = "gfup",
-        downscale_factor: float = 0.5,  # 新增：下采样比例，与 infer.py 一致
     ):
         super().__init__()
         self.device = torch.device(device)
         self.model_name = name
         self.only_clear = only_clear
-        self.downscale_factor = downscale_factor
 
         # 1. 加载 OpenCLIP 模型
         pretrained_tag = "openai" if "laion" not in name else "laion2b_s34b_b88k"
@@ -181,7 +179,7 @@ class DenseClip(nn.Module):
         # --- 针对 SatUp 的特殊处理：与 infer.py 完全一致 ---
         if isinstance(self.up, SatUp):
             # 1. 下采样输入图像
-            lr_img = F.interpolate(x, scale_factor=self.downscale_factor, mode='bilinear', align_corners=False)
+            lr_img = x
             # 2. 从下采样图像提取 ClearCLIP 特征
             lr_features = self._extract_clearclip_features(lr_img)
             # 3. 调用 SatUp 上采样至原始尺寸
