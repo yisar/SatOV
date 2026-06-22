@@ -29,7 +29,9 @@ class ClearCLIPFeature(nn.Module):
         self.device = device
 
         model, _, _ = open_clip.create_model_and_transforms(
-            model_name, pretrained="openai", device=device
+            model_name,
+            pretrained="openai",
+            device=device
         )
 
         self.visual = model.visual.eval()
@@ -58,12 +60,18 @@ class ClearCLIPFeature(nn.Module):
         if old_grid != grid_h or old_grid != grid_w:
             patch_pos = patch_pos.reshape(1, old_grid, old_grid, -1).permute(0, 3, 1, 2)
             patch_pos = F.interpolate(
-                patch_pos, size=(grid_h, grid_w), mode="bicubic", align_corners=False
+                patch_pos,
+                size=(grid_h, grid_w),
+                mode="bicubic",
+                align_corners=False
             )
             patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, grid_h * grid_w, -1)
             pos_embed = torch.cat([cls_pos, patch_pos.squeeze(0)], dim=0)
 
-        x_tokens = torch.cat([cls_token.unsqueeze(0).expand(B, 1, -1), x_tokens], dim=1)
+        x_tokens = torch.cat(
+            [cls_token.unsqueeze(0).expand(B, 1, -1), x_tokens],
+            dim=1
+        )
 
         x_tokens = x_tokens + pos_embed
         x_tokens = self.visual.ln_pre(x_tokens)
@@ -87,7 +95,7 @@ class ClearCLIPFeature(nn.Module):
         q = q.view(B, N, heads, dim_head).transpose(1, 2)
         v = v.view(B, N, heads, dim_head).transpose(1, 2)
 
-        attn_map = (q @ q.transpose(-2, -1)) * (dim_head**-0.5)
+        attn_map = (q @ q.transpose(-2, -1)) * (dim_head ** -0.5)
         attn_map = attn_map.softmax(dim=-1)
 
         out = (attn_map @ v).transpose(1, 2).reshape(B, N, D)
@@ -127,14 +135,12 @@ class ImageFolderDataset(Dataset):
     def __init__(self, root, mean, std, size=384):
         self.files = sorted(glob.glob(os.path.join(root, "*.jpg")))
 
-        self.tf = T.Compose(
-            [
-                T.Resize((size, size)),
-                T.RandomHorizontalFlip(),
-                T.ToTensor(),
-                T.Normalize(mean=mean, std=std),
-            ]
-        )
+        self.tf = T.Compose([
+            T.Resize((size, size)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(mean=mean, std=std),
+        ])
 
     def __len__(self):
         return len(self.files)
@@ -146,7 +152,13 @@ class ImageFolderDataset(Dataset):
 # =========================
 # TRAIN
 # =========================
-def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="ViT-B-16"):
+def train(
+    data_root,
+    epochs=50,
+    batch_size=4,
+    lr=2e-4,
+    model_name="ViT-B-16"
+):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     extractor = ClearCLIPFeature(model_name, device)
@@ -155,7 +167,9 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="ViT-B-16"):
     # FIX: open_clip 返回值是3个
     # =========================
     model, _, preprocess = open_clip.create_model_and_transforms(
-        model_name, pretrained="openai", device=device
+        model_name,
+        pretrained="openai",
+        device=device
     )
 
     mean = preprocess.transforms[-1].mean
@@ -194,13 +208,40 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="ViT-B-16"):
                 lr_feat = extractor(kv_img)
 
             pred = model(
-                image=query_img, features=lr_feat, output_size=hr_feat.shape[-2:]
+                image=query_img,
+                features=lr_feat,
+                output_size=hr_feat.shape[-2:]
             )
+
+            # pred_flat = rearrange(pred, "b c h w -> (b h w) c")
+            # target_flat = rearrange(hr_feat, "b c h w -> (b h w) c")
+
+            # cos_sim = F.cosine_similarity(pred_flat, target_flat, dim=1).mean()
+
+            # print(
+            #     "pred:",
+            #     pred.mean().item(),
+            #     pred.std().item(),
+            #     "| target:",
+            #     hr_feat.mean().item(),
+            #     hr_feat.std().item(),
+            #     "| cos_sim:",
+            #     cos_sim.item()
+            # )
 
             loss = loss_fn(pred, hr_feat)
 
             opt.zero_grad()
             loss.backward()
+            # for name, p in model.named_parameters():
+            #     if p.grad is None:
+            #         print(name, "None")
+            #     else:
+            #         print(
+            #             name,
+            #             p.grad.abs().mean().item(),
+            #             p.grad.abs().max().item(),
+            #         )
             opt.step()
 
             total += loss.item()
@@ -208,7 +249,7 @@ def train(data_root, epochs=50, batch_size=4, lr=2e-4, model_name="ViT-B-16"):
 
         print(f"Epoch {epoch}: {total / len(loader):.4f}")
 
-        torch.save(model.state_dict(), f"satup_{epoch}.pth")
+        torch.save(model.state_dict(), f"satup_a_{epoch}.pth")
 
 
 if __name__ == "__main__":
@@ -228,5 +269,5 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
-        model_name=args.model_name,
+        model_name=args.model_name
     )
