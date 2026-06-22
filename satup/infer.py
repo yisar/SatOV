@@ -181,7 +181,7 @@ def main(args):
     lr_feat = clip_encoder(lr)
 
     satup = SatUp(dim=128, v_dim=768).to(device)
-    satup.load_state_dict(torch.load(args.weight, map_location=device))
+    satup.load_state_dict(torch.load(args.weight, map_location=device, weights_only=True))
     satup.eval()
 
     with torch.no_grad():
@@ -210,14 +210,15 @@ def main(args):
     ax[0].imshow(img_np)
     ax[0].set_title("Image")
 
-    ax[1].imshow(gt_np)
-    ax[1].set_title("GT (ClearCLIP PCA)")
+    ax[1].imshow(lr_np)
+    ax[1].set_title("LR")
 
-    ax[2].imshow(pred_np)
-    ax[2].set_title("SatUp")
+    ax[2].imshow(gt_np)
+    ax[2].set_title("GT")
 
-    ax[3].imshow(lr_np)
-    ax[3].set_title("LR")
+    ax[3].imshow(pred_np)
+    ax[3].set_title("SatUp")
+
 
     for a in ax:
         a.axis("off")
@@ -236,7 +237,7 @@ def main(args):
 # =========================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="asset/img.jpg")
+    parser.add_argument("--image", default="asset/P0016654.jpg")
     parser.add_argument("--weight", default="satup_22.pth")
     parser.add_argument("--save_dir", default="results")
     parser.add_argument("--output_size", type=int, default=224)
