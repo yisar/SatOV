@@ -57,14 +57,11 @@ class DenseClip(nn.Module):
         elif upsampler == "satup":
             # 直接使用 SatUp，不再通过 Wrapper，确保与 infer.py 调用方式一致
             self.up = SatUp(dim=128, v_dim=768).to(self.device)
-            ckpt = torch.load("satup_22.pth", map_location=self.device)
+            ckpt = torch.load("satup_a_15.pth", map_location=self.device)
             self.up.load_state_dict(ckpt, strict=True)
             self.up.eval()
         elif upsampler == "gfup":
             self.up = GaussianUpsamplerWrapper()
-        elif upsampler == "featup":
-            hub_model = load_featup_upsampler(device=self.device)
-            self.up = lambda g, f: hub_model(g, f)
 
         if self.only_clear is not False:
             self.up = None
@@ -189,7 +186,8 @@ class DenseClip(nn.Module):
         # --- 其他上采样器（或 only_clear）保持原有逻辑 ---
         # 注意：原有逻辑是从高分辨率图像 x 提取特征，然后上采样
         lr_features = self._extract_clearclip_features(x)  # 高分辨率下的低分辨率特征图
-        guide = hr_guide if hr_guide is not None else x
+        # guide = hr_guide if hr_guide is not None else x
+        guide = x
 
         if self.up is not None:
             up_features = self.up(guide, lr_features)

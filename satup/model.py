@@ -3,24 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from torch import einsum
-
-class SimpleSatUp(nn.Module):
-    def __init__(self, dim=128, v_dim=768):
-        super().__init__()
-        self.encoder = nn.Conv2d(3, dim, 3, padding=1)
-        self.cross_attn = nn.MultiheadAttention(dim, num_heads=4, batch_first=True)
-        self.output = nn.Conv2d(dim, v_dim, 1)
-        
-    def forward(self, image, features, output_size):
-        x = self.encoder(image)
-        x = F.adaptive_avg_pool2d(x, output_size)
-        B, C, H, W = x.shape
-        x = x.view(B, C, H*W).permute(0, 2, 1)
-        f = features.view(B, features.size(1), -1).permute(0, 2, 1)
-        out, _ = self.cross_attn(x, f, f)
-        out = out.permute(0, 2, 1).view(B, -1, H, W)
-        return self.output(out)
 
 def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
     # Create a grid of coordinates
@@ -196,7 +178,6 @@ def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
-
 class RoPE(nn.Module):
     def __init__(
         self,
@@ -206,19 +187,22 @@ class RoPE(nn.Module):
         super().__init__()
         self.dim = dim
         self.theta = theta
-        self.freqs = nn.Parameter(torch.empty(2, self.dim))
+        # 改动1: 改为 buffer，不需要梯度，且初始化时自动完成
+        freqs = torch.zeros(2, self.dim)
+        self.register_buffer('freqs', freqs, persistent=False)
+        self._init_freqs()
 
-    def _device_weight_init(self):
+    def _init_freqs(self):
         # Create freqs in 1d
-        freqs_1d = self.theta ** torch.linspace(0, -1, self.dim // 4)
+        freqs_1d = self.theta ** torch.linspace(0, -1, self.dim // 4, device=self.freqs.device)
         # duplicate freqs for rotation pairs of channels
         freqs_1d = torch.cat([freqs_1d, freqs_1d])
         # First half of channels do x, second half do y
-        freqs_2d = torch.zeros(2, self.dim)
+        freqs_2d = torch.zeros(2, self.dim, device=self.freqs.device)
         freqs_2d[0, : self.dim // 2] = freqs_1d
         freqs_2d[1, -self.dim // 2 :] = freqs_1d
         # it's an angular freq here
-        self.freqs.data.copy_(freqs_2d * 2 * torch.pi)
+        self.freqs.copy_(freqs_2d * 2 * torch.pi)
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
         angle = coords @ self.freqs
@@ -273,7 +257,7 @@ class SatUp(nn.Module):
         self.sft_key = SFT(dim, dim)
 
         self.rope = RoPE(dim)
-        self.rope._device_weight_init()
+        # self.rope._device_weight_init()
 
     def upsample(self, encoded_image, features, output_size):
         _, _, h, w = features.shape
@@ -286,10 +270,10 @@ class SatUp(nn.Module):
         # Process Keys and Values.
         keys = self.key_encoder(encoded_image)
         keys = F.adaptive_avg_pool2d(keys, output_size=(h, w))
-        keys = self.sft_key(
-            keys, self.key_features_encoder(F.normalize(features, dim=1))
-        )
-        # keys = self.sft_key(keys, self.key_features_encoder(features))
+        # keys = self.sft_key(
+        #     keys, self.key_features_encoder(F.normalize(features, dim=1))
+        # )
+        keys = self.sft_key(keys, self.key_features_encoder(features))
 
         # Values
         values = features
