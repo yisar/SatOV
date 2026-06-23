@@ -11,7 +11,13 @@ import numpy as np
 from PIL import Image
 
 import open_clip
-from model import SatUp   # 请确保 model.py 中定义了 SatUp 类
+from model import SatUp  
+
+# # 填入你自己的hf token
+# os.environ["HF_TOKEN"] = "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"
+# # 国内环境额外配置镜像加速
+# os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ['GITHUB_TOKEN'] = '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'
 
 
 # =========================

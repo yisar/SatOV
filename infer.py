@@ -11,11 +11,11 @@ from torchvision import transforms
 from torchvision.utils import draw_segmentation_masks
 
 
-# 核心后处理包
-import pydensecrf.densecrf as dcrf
-from pydensecrf.utils import (
-    unary_from_softmax,
-)
+# # 核心后处理包
+# import pydensecrf.densecrf as dcrf
+# from pydensecrf.utils import (
+#     unary_from_softmax,
+# )
 
 from model import DenseClip
 
@@ -28,52 +28,52 @@ def get_gaussian_mask(size, sigma=0.4):
     return mask / mask.max()
 
 
-def apply_dense_crf(img_np, probs_np):
-    """
-    使用 Dense CRF 优化分割结果
-    img_np: 原始 RGB 图像 (H, W, 3), np.uint8
-    probs_np: 模型输出的概率分布 (C, H, W), np.float32
-    """
-    C, H, W = probs_np.shape
-    d = dcrf.DenseCRF2D(W, H, C)  # 注意这里是 W, H
+# def apply_dense_crf(img_np, probs_np):
+#     """
+#     使用 Dense CRF 优化分割结果
+#     img_np: 原始 RGB 图像 (H, W, 3), np.uint8
+#     probs_np: 模型输出的概率分布 (C, H, W), np.float32
+#     """
+#     C, H, W = probs_np.shape
+#     d = dcrf.DenseCRF2D(W, H, C)  # 注意这里是 W, H
 
-    # 1. 设置一元势能 (模型给出的分类概率)
-    # unary_from_softmax 需要的输入是 (C, H*W)
-    unary = unary_from_softmax(probs_np)
-    d.setUnaryEnergy(unary)
+#     # 1. 设置一元势能 (模型给出的分类概率)
+#     # unary_from_softmax 需要的输入是 (C, H*W)
+#     unary = unary_from_softmax(probs_np)
+#     d.setUnaryEnergy(unary)
 
-    # 2. 添加二元势能 - 高斯项 (只考虑位置，去除孤立的小噪点)
-    # sxy 控制平滑的强弱，数值越大越平滑
-    d.addPairwiseGaussian(
-        sxy=(3, 3),
-        compat=3,
-        kernel=dcrf.DIAG_KERNEL,
-        normalization=dcrf.NORMALIZE_SYMMETRIC,
-    )
+#     # 2. 添加二元势能 - 高斯项 (只考虑位置，去除孤立的小噪点)
+#     # sxy 控制平滑的强弱，数值越大越平滑
+#     d.addPairwiseGaussian(
+#         sxy=(3, 3),
+#         compat=3,
+#         kernel=dcrf.DIAG_KERNEL,
+#         normalization=dcrf.NORMALIZE_SYMMETRIC,
+#     )
 
-    # 3. 添加二元势能 - 双边项 (考虑位置+颜色，核心：让边缘对齐纹理)
-    # sxy: 空间位置标准差; srgb: 颜色标准差 (数值越小，对颜色差异越敏感)
-    d.addPairwiseBilateral(
-        sxy=(40, 40),
-        srgb=(13, 13, 13),
-        rgbim=img_np,
-        compat=10,
-        kernel=dcrf.DIAG_KERNEL,
-        normalization=dcrf.NORMALIZE_SYMMETRIC,
-    )
+#     # 3. 添加二元势能 - 双边项 (考虑位置+颜色，核心：让边缘对齐纹理)
+#     # sxy: 空间位置标准差; srgb: 颜色标准差 (数值越小，对颜色差异越敏感)
+#     d.addPairwiseBilateral(
+#         sxy=(40, 40),
+#         srgb=(13, 13, 13),
+#         rgbim=img_np,
+#         compat=10,
+#         kernel=dcrf.DIAG_KERNEL,
+#         normalization=dcrf.NORMALIZE_SYMMETRIC,
+#     )
 
-    # 执行推理 (迭代 5-10 次即可)
-    Q = d.inference(10)
+#     # 执行推理 (迭代 5-10 次即可)
+#     Q = d.inference(10)
 
-    # 将结果转回 (C, H, W)
-    return np.array(Q).reshape((C, H, W))
+#     # 将结果转回 (C, H, W)
+#     return np.array(Q).reshape((C, H, W))
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="asset/img3.jpg")
+    parser.add_argument("--filename", type=str, default="asset/img.jpg")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument(
         "--stride", type=int, default=112, help="步长，推荐窗口的一半实现重叠"
@@ -196,7 +196,11 @@ def main():
         )
         save_path = f"{args.filename}"
         seg_result_pil = TF.to_pil_image(seg_result)
-        seg_result_pil.save(save_path.replace("dataset", "res").replace(".jpg", "_ours.png").replace(".png", "_ours.png"))
+        seg_result_pil.save(
+            save_path.replace("dataset", "res")
+            .replace(".jpg", "_ours.png")
+            .replace(".png", "_ours.png")
+        )
 
         # 5. 可视化
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))

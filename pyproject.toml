@@ -10,7 +10,6 @@ dependencies = [
     "open-clip-torch>=3.3.0",
     "torchaudio==2.4.1",
     "torchvision==0.19.1",
-    "pydensecrf2>=1.1",
     "transformers==4.35.2",
     "ultralytics>=8.4.62",
     "kornia>=0.8.3",
