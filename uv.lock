@@ -680,7 +680,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.1.0.70"
 source = { registry = "https://download.pytorch.org/whl/cu121" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cu121/nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl", hash = "sha256:165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f" },
@@ -707,9 +707,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.4.5.107"
 source = { registry = "https://download.pytorch.org/whl/cu121" }
 dependencies = [
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cusparse-cu12" },
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-cusparse-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cu121/nvidia_cusolver_cu12-11.4.5.107-py3-none-manylinux1_x86_64.whl", hash = "sha256:8a7ec542f0412294b15072fa7dab71d31334014a69f953004ea7a118206fe0dd" },
@@ -720,7 +720,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.1.0.106"
 source = { registry = "https://download.pytorch.org/whl/cu121" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cu121/nvidia_cusparse_cu12-12.1.0.106-py3-none-manylinux1_x86_64.whl", hash = "sha256:f3b50f42cf363f86ab21f720998517a659a48131e8d538dc02f8768237bd884c" },
@@ -966,6 +966,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/c7/7bb2e321574b10df20cbde462a94e2b71d05f9bbda251ef27d104668306a/psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee", size = 134617, upload-time = "2026-01-28T18:15:36.514Z" },
 ]
 
+[[package]]
+name = "pydensecrf2"
+version = "1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/b1/5be08a234d19580411a1f3f0d10363442ad8a83c35f39e59c99a33f1eb2b/pydensecrf2-1.1.tar.gz", hash = "sha256:c39b0b544e74256fade1a294db9df39ee408b07ac398cd96036f37ed19843139", size = 1468587, upload-time = "2024-12-23T12:56:29.891Z" }
 
 [[package]]
 name = "pyparsing"
@@ -1148,6 +1153,7 @@ dependencies = [
     { name = "nvmpy" },
     { name = "omegaconf" },
     { name = "open-clip-torch" },
+    { name = "pydensecrf2" },
     { name = "scikit-learn" },
     { name = "tensorboard" },
     { name = "torchaudio" },
@@ -1165,6 +1171,7 @@ requires-dist = [
     { name = "nvmpy", specifier = ">=0.2.4" },
     { name = "omegaconf", specifier = ">=2.3.1" },
     { name = "open-clip-torch", specifier = ">=3.3.0" },
+    { name = "pydensecrf2", specifier = ">=1.1" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "torchaudio", specifier = "==2.4.1" },
@@ -1497,7 +1504,7 @@ name = "triton"
 version = "3.0.0"
 source = { registry = "https://download.pytorch.org/whl/cu121" }
 dependencies = [
-    { name = "filelock" },
+    { name = "filelock", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/triton-3.0.0-1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:34e509deb77f1c067d8640725ef00c5cbfcb2052a1a3cb6a6d343841f92624eb", upload-time = "2024-07-25T00:33:19Z" },
