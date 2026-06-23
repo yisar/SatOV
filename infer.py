@@ -233,7 +233,7 @@ def main():
     ]
 
     # 加载模型并固定eval
-    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="satup")
+    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="anyup")
     model.eval()
 
     # 创建输出文件夹
