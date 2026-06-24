@@ -220,6 +220,6 @@ def evaluate_folder(pred_folder, gt_folder):
 # 入口
 # =====================================================
 if __name__ == "__main__":
-    PRED_FOLDER = "out/UDD6_sat"
-    GT_FOLDER = "out/UDD6_gt"
+    PRED_FOLDER = "out/LoveDA_sat"
+    GT_FOLDER = "out/LoveDA_gt"
     result = evaluate_folder(PRED_FOLDER, GT_FOLDER)

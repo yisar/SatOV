@@ -45,7 +45,7 @@ def resize_images_fixed_width(input_dir, output_dir, target_width=1000):
 
 if __name__ == "__main__":
     # ========== 修改这里的路径 ==========
-    INPUT_FOLDER = r"./out/gt"   # 输入图片文件夹
+    INPUT_FOLDER = r"./out/DDOA"   # 输入图片文件夹
     OUTPUT_FOLDER = r"./out/UUD6_gt" # 输出保存文件夹
     FIX_WIDTH = 1000            # 固定宽度
 

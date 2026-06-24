@@ -217,7 +217,7 @@ def main():
         "grass",
         "cropland,field",
         "building,roof,house",
-        "playground"
+        # "playground"
     ]
     custom_palette = [
         (68, 1, 84),
@@ -229,7 +229,7 @@ def main():
         (73, 193, 110),
         (160, 218, 57),
         (253, 231, 37),
-        (250, 200, 20)
+        # (250, 200, 20)
     ]
 
     # 加载模型并固定eval
