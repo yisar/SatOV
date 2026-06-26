@@ -57,14 +57,12 @@ class DenseClip(nn.Module):
         elif upsampler == "satup":
             # 直接使用 SatUp，不再通过 Wrapper，确保与 infer.py 调用方式一致
             self.up = SatUp(dim=128, v_dim=768).to(self.device)
-            ckpt = torch.load("satup_a_15.pth", map_location=self.device)
+            ckpt = torch.load("satup.pth", map_location=self.device)
             self.up.load_state_dict(ckpt, strict=True)
             self.up.eval()
-        elif upsampler == "gfup":
+        elif upsampler == "gsu":
             self.up = GaussianUpsamplerWrapper()
 
-        if self.only_clear is not False:
-            self.up = None
 
         # 4. 视觉投影层 (1x1 conv)
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
