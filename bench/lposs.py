@@ -158,7 +158,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="./asset/img5.jpg")
+    parser.add_argument("--filename", type=str, default="data/DDOA/origin/_P1886.png")
     parser.add_argument("--window_size", type=int, default=224)
     parser.add_argument("--stride", type=int, default=112)
     return parser.parse_args()
@@ -268,7 +268,7 @@ def main():
         )
 
         Image.fromarray(seg.permute(1, 2, 0).numpy()).save(
-            args.filename.replace("origin", "lposs_crf")
+            "data/DDOA/origin/_P1886_lposs.png"
         )
 
         plt.figure(figsize=(12, 6))

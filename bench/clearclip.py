@@ -1,5 +1,7 @@
 import argparse
 import os
+from pathlib import Path
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,7 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from torchvision import transforms
 from torchvision.utils import draw_segmentation_masks
-
+root_path = Path(__file__).parent.parent
+sys.path.append(str(root_path))
 from model import DenseClip   # 请确保 model.py 中定义了 DenseClip
 
 
@@ -128,7 +131,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--filename", type=str, default="bench/UDD/origin/DJI_0563.png")
+    parser.add_argument("--filename", type=str, default="./data/UDD6/origin/DJI_0431.JPG")
     parser.add_argument("--window_size", type=int, default=224, help="CLIP 窗口大小")
     parser.add_argument("--stride", type=int, default=112, help="步长，推荐窗口的一半")
     return parser.parse_args()
@@ -167,7 +170,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, only_clear=True)
+    model = DenseClip("ViT-B-16", classnames, device=args.device, only_clear=True, upsampler="222")
     model.eval()
 
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082), (0.2686, 0.2613, 0.2757))
@@ -250,7 +253,7 @@ def main():
         )
 
         # 保存结果
-        save_path = f"{args.filename.replace('origin', 'clearclip')}"
+        save_path = f"./bench/vis/clearclip_0431.png"
         seg_result_pil = TF.to_pil_image(seg_result)
         seg_result_pil.save(save_path)
 
