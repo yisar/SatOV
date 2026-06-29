@@ -70,7 +70,7 @@ instance/
 /data/
 # Scrapy stuff:
 .scrapy
-
+/dinov3/
 # Sphinx documentation
 docs/_build/
 

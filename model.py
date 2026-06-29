@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
 from satup.gsup import GaussianUpsamplerWrapper
-from bench.segearthov import load_featup_upsampler
 from satup.model import SatUp
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
