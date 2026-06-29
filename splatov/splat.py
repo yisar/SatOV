@@ -33,11 +33,21 @@ model = model.to(device).eval()
 # =========================
 # 2. input
 # =========================
-image_path = "asset/256.png"
+image_path = "asset/9.png"
 image = Image.open(image_path).convert("RGB")
 
-# class_names = ["road", "building", "tree","grass","house" "river","house", "background"]
-class_names = ["road", "building","grass","house","tree" "river", "background"]
+# 修正：确保每个类别用逗号隔开
+class_names = [
+    "road",
+    "building",
+    "grass",
+    "house",
+    "barren",
+    "tree",
+    "river",
+    "field",
+    "background",
+]
 texts = [f"a photo of {c}" for c in class_names]
 
 transform = make_classification_eval_transform()
@@ -56,7 +66,7 @@ with torch.no_grad():
 # 4. patch reshape
 # =========================
 B, P, D = image_patch_tokens.shape
-H = W = int(P ** 0.5)
+H = W = int(P**0.5)
 
 img_feat = image_patch_tokens.transpose(1, 2).reshape(B, D, H, W)
 
@@ -76,19 +86,32 @@ logits = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)
 prob = torch.softmax(logits / 0.07, dim=1)
 
 # =========================
-# 7. Gaussian JBU (RGB guided)
+# 7. Gaussian JBU (RGB guided) —— 修正版
 # =========================
 with torch.no_grad():
-    B, C, h, w = prob.shape
+    B, C, h, w = prob.shape  # prob: [1, num_classes, h, w]
     H_img, W_img = image_tensor.shape[-2:]
 
-    prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(0)
+    # 低分辨率特征 (prob_lr)
+    prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(0)  # [1, h*w, C]
 
-    patch_coords_lr = create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
-    patch_coords_hr = create_coordinate_grid_2d(H_img, W_img, device).reshape(-1, 2).unsqueeze(0)
+    # 坐标网格
+    patch_coords_lr = (
+        create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
+    )  # [1, h*w, 2]
+    patch_coords_hr = (
+        create_coordinate_grid_2d(H_img, W_img, device).reshape(-1, 2).unsqueeze(0)
+    )  # [1, H*W, 2]
 
-    pixels_lr = rearrange(image_tensor, "b c h w -> b (h w) c")
-    pixels_hr = pixels_lr
+    # ---- 关键修正：正确的高低分辨率 RGB ----
+    # 低分辨率 RGB：将原图下采样到 (h, w)
+    image_lr = F.interpolate(
+        image_tensor, size=(h, w), mode="bilinear", align_corners=False
+    )
+    pixels_lr = rearrange(image_lr, "b c h w -> b (h w) c")  # [1, h*w, 3]
+
+    # 高分辨率 RGB：使用原始图像 tensor（已为目标输出尺寸）
+    pixels_hr = rearrange(image_tensor, "b c h w -> b (h w) c")  # [1, H*W, 3]
 
     feature_upsampler = GaussianFeatureUpsampler(
         patch_coords_lr=patch_coords_lr,
@@ -104,9 +127,8 @@ with torch.no_grad():
     upsampled = feature_upsampler.forward(prob_lr)
 
 # =========================
-# 9. FIXED reshape (核心修复点)
+# 9. reshape
 # =========================
-
 B = 1
 C = upsampled.shape[-1]
 
@@ -120,15 +142,18 @@ mask = up_hr.argmax(dim=1)[0].cpu().numpy()
 # =========================
 # 11. visualization
 # =========================
+# 自定义颜色表（7种颜色，与类别数一致）
 custom_palette = [
     (68, 1, 84),
+    (72, 40, 120),
+    (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
+    (31, 158, 137),
     (73, 193, 110),
     (160, 218, 57),
     (253, 231, 37),
 ]
-
 custom_palette = np.array(custom_palette) / 255.0
 cmap = ListedColormap(custom_palette)
 
@@ -140,11 +165,8 @@ plt.title("Input")
 plt.axis("off")
 
 plt.subplot(1, 2, 2)
-
-mask_vis = mask % len(custom_palette)
-
-plt.imshow(mask_vis, cmap=cmap)
-plt.title("Fixed Gaussian JBU")
+plt.imshow(mask, cmap=cmap, vmin=0, vmax=len(class_names) - 1)
+plt.title("Gaussian Splatting (RGB guided)")
 plt.axis("off")
 
 plt.show()
