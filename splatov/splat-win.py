@@ -22,7 +22,7 @@ from dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
 # =========================
 # Gaussian JBU
 # =========================
-from satup.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
+from splatov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
 
 # =========================
 # 1. Load model
@@ -32,27 +32,40 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
 
 # =========================
-# 2. Input image and class labels
+# 2. 输入图像和类别分组（支持同义词）
 # =========================
 image_path = "asset/img.jpg"
 image = Image.open(image_path).convert("RGB")
 orig_w, orig_h = image.size
 H_img, W_img = orig_h, orig_w
 
-class_names = [
-    # "background",
-    "pavement",
-    "road",
-    "forest",
-    "grass",
-    "field",
-    # "cropland"
-    "river",
-    "building",
-    "hourse",
+# -------------------- 修改开始 --------------------
+# 定义同义词分组：每个子列表代表一个语义类别
+class_groups = [
+    # ["background"],
+    ["bareland", "barren"],
+    ["pavement"],
+    ["road"],
+    ["forest", "tree"],
+    ["river", "water"],
+    ["grass"],
+    ["field"],
+    ["building", "house", "roof"],  # 主词 building，同义词 house, roof
 ]
-texts = [f"a photo of {c}" for c in class_names]
-num_classes = len(class_names)
+
+# 展平所有文本，用于编码
+flat_texts = []
+group_index_maps = []  # 记录每个组对应 flat_texts 中的索引列表
+for group in class_groups:
+    start = len(flat_texts)
+    flat_texts.extend(group)
+    end = len(flat_texts)
+    group_index_maps.append(list(range(start, end)))
+
+texts = [f"a photo of {c}" for c in flat_texts]
+num_classes = len(class_groups)  # 最终输出的类别数（合并后）
+num_flat = len(flat_texts)  # 原始文本总数（含同义词）
+# -------------------- 修改结束 --------------------
 
 # =========================
 # 3. Sliding window preparation
@@ -102,12 +115,12 @@ def preprocess_patch(patch_np):
 
 
 # =========================
-# 5. Tokenize text globally
+# 5. Tokenize all flattened texts globally
 # =========================
 text_tokens = tokenizer.tokenize(texts).to(device)
 
 # =========================
-# 6. Accumulators on GPU
+# 6. Accumulators on GPU (shape: [num_classes, H, W])
 # =========================
 acc_logits = torch.zeros(
     (num_classes, H_img, W_img), dtype=torch.float32, device=device
@@ -139,16 +152,43 @@ with torch.no_grad():
         # DINOv3 forward
         _, image_patch_tokens, _ = model.encode_image_with_patch_tokens(win_tensor)
         B, P, D = image_patch_tokens.shape
-        h = w = int(P**0.5)  # patch grid size
+        h = w = int(P**0.5)
         img_feat = image_patch_tokens.transpose(1, 2).reshape(B, D, h, w)
-        text_feat = model.encode_text(text_tokens)[:, 1024:]
+
+        # 编码所有展平后的文本（含同义词）
+        text_feat = model.encode_text(text_tokens)[:, 1024:]  # [num_flat, D]
         img_feat = F.normalize(img_feat, dim=1)
         text_feat = F.normalize(text_feat, dim=-1)
-        logits = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)  # [1, C, h, w]
-        prob = torch.softmax(logits / 0.07, dim=1)  # [1, C, h, w]
+
+        # 1. 先计算所有独立文本的 Logits
+        logits_flat = torch.einsum(
+            "bchw,nc->bnhw", img_feat, text_feat
+        )  # [1, num_flat, h, w]
+
+        # ====================== 修改开始（加权合并同义词） ======================
+        # 2. 根据同义词分组合并 Logits（加权平均，主词权重大）
+        merged_logits = []
+        for idx_list in group_index_maps:
+            # 第一个索引为主词，其余为同义词
+            # 权重：主词 1.0，同义词 0.3（可调）
+            weights = [1.0] + [0.3] * (len(idx_list) - 1)
+            # 计算加权和
+            weighted_sum = torch.zeros_like(logits_flat[:, idx_list[0], :, :])
+            for i, idx in enumerate(idx_list):
+                weighted_sum += logits_flat[:, idx, :, :] * weights[i]
+            # 归一化权重，保持量级不变
+            group_logit = weighted_sum / sum(weights)
+            merged_logits.append(group_logit.unsqueeze(1))  # [1, 1, h, w]
+        logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
+        # ====================== 修改结束 ======================
+
+        # 3. 计算概率（此时类别数 = num_classes）
+        prob = torch.softmax(logits / 0.07, dim=1)  # [1, num_classes, h, w]
 
         # Gaussian JBU upsampling to win_size
-        prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(0)  # [1, h*w, C]
+        prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(
+            0
+        )  # [1, h*w, num_classes]
         patch_coords_lr = (
             create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
         )
@@ -171,11 +211,11 @@ with torch.no_grad():
             pixels_lr=pixels_lr,
             pixels_hr=pixels_hr,
         ).to(device)
-        upsampled = upsampler.forward(prob_lr)  # [1, win_size*win_size, C]
+        upsampled = upsampler.forward(prob_lr)  # [1, win_size*win_size, num_classes]
         up_prob = upsampled.reshape(1, win_size, win_size, num_classes).permute(
             0, 3, 1, 2
-        )  # [1, C, 224, 224]
-        up_prob = up_prob.squeeze(0)  # [C, 224, 224]
+        )  # [1, num_classes, 224, 224]
+        up_prob = up_prob.squeeze(0)  # [num_classes, 224, 224]
 
         # Crop overlapping region in original image coordinates
         y_start = max(0, y0)
@@ -201,8 +241,8 @@ with torch.no_grad():
 # 8. Final logits and smoothing
 # =========================
 acc_weights = acc_weights.clamp(min=1e-6)
-final_logits = acc_logits / acc_weights  # [C, H, W]
-final_logits = final_logits.unsqueeze(0)  # [1, C, H, W]
+final_logits = acc_logits / acc_weights  # [num_classes, H, W]
+final_logits = final_logits.unsqueeze(0)  # [1, num_classes, H, W]
 
 # Depthwise Gaussian smoothing kernel (3x3)
 kernel = (
@@ -211,23 +251,23 @@ kernel = (
     ).view(1, 1, 3, 3)
     / 16
 )
-kernel = kernel.repeat(num_classes, 1, 1, 1)  # [C, 1, 3, 3]
+kernel = kernel.repeat(num_classes, 1, 1, 1)  # [num_classes, 1, 3, 3]
 final_logits_smooth = F.conv2d(
     final_logits, weight=kernel, padding=1, groups=num_classes
 )
 
 # Convert to numpy and argmax
-final_logits_np = final_logits_smooth.squeeze(0).cpu().numpy()  # [C, H, W]
+final_logits_np = final_logits_smooth.squeeze(0).cpu().numpy()  # [num_classes, H, W]
 mask = np.argmax(final_logits_np, axis=0)  # [H, W]
 
 # Optional median filter to remove small isolated blobs
 mask = median_filter(mask, size=3)
 
 # =========================
-# 9. Visualization
+# 9. Visualization (自动适配类别数)
 # =========================
-custom_palette = [
-    # (68, 1, 84),
+# 预定义调色板（8种颜色，可自行扩展）
+preset_palette = [
     (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
@@ -237,8 +277,16 @@ custom_palette = [
     (160, 218, 57),
     (253, 231, 37),
 ]
-custom_palette = np.array(custom_palette) / 255.0
-cmap = ListedColormap(custom_palette)
+preset_palette = np.array(preset_palette) / 255.0
+
+if num_classes <= len(preset_palette):
+    palette = preset_palette[:num_classes]
+else:
+    # 如果类别数超过预设，从 matplotlib 颜色映射中取色
+    cmap = plt.cm.get_cmap("tab20", num_classes)
+    palette = np.array([cmap(i)[:3] for i in range(num_classes)])
+
+cmap = ListedColormap(palette)
 
 plt.figure(figsize=(10, 5))
 plt.subplot(1, 2, 1)
@@ -248,7 +296,7 @@ plt.axis("off")
 
 plt.subplot(1, 2, 2)
 plt.imshow(mask, cmap=cmap, vmin=0, vmax=num_classes - 1)
-plt.title("Sliding Window + Gaussian JBU")
+plt.title("Sliding Window + Gaussian Splatting")
 plt.axis("off")
 
 plt.show()

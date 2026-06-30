@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from satup.gsup import GaussianUpsamplerWrapper
+from splatov.gsup import GaussianUpsamplerWrapper
 from satup.model import SatUp
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -180,7 +180,6 @@ class DenseClip(nn.Module):
             up_features = self.up(lr_img, lr_features, output_size=(H, W))
             return up_features
 
-        # --- 其他上采样器（或 only_clear）保持原有逻辑 ---
         # 注意：原有逻辑是从高分辨率图像 x 提取特征，然后上采样
         lr_features = self._extract_clearclip_features(x)  # 高分辨率下的低分辨率特征图
         # guide = hr_guide if hr_guide is not None else x

@@ -20,7 +20,7 @@ from dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
 # =========================
 # Gaussian JBU
 # =========================
-from satup.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
+from splatov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
 
 
 # =========================
