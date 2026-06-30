@@ -34,7 +34,7 @@ model = model.to(device).eval()
 # =========================
 # 2. Input image and class labels
 # =========================
-image_path = "asset/9.png"
+image_path = "asset/img.jpg"
 image = Image.open(image_path).convert("RGB")
 orig_w, orig_h = image.size
 H_img, W_img = orig_h, orig_w
@@ -57,8 +57,8 @@ num_classes = len(class_names)
 # =========================
 # 3. Sliding window preparation
 # =========================
-win_size = 448
-stride = 224
+win_size = 224
+stride = 112
 
 
 def pad_to_multiple(img, win_size, stride):
@@ -227,7 +227,7 @@ mask = median_filter(mask, size=3)
 # 9. Visualization
 # =========================
 custom_palette = [
-    (68, 1, 84),
+    # (68, 1, 84),
     (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
