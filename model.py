@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import open_clip
-from splatov.gsup import GaussianUpsamplerWrapper
+from dino_splat_ov.gsup import GaussianUpsamplerWrapper
 from satup.model import SatUp
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +80,15 @@ class DenseClip(nn.Module):
 
         # 6. 初始化零样本分类器
         self._init_zeroshot_classifier()
+    def extract_patch_features(self, images: torch.Tensor):
+        """
+        只提取 ClearCLIP 去偏后的 Patch 级特征，不做任何上采样和投影。
+        返回: [B, C, grid_h, grid_w]  例如 [B, 768, 14, 14]
+        """
+        images = images.to(self.device)
+        lr_features = self._extract_clearclip_features(images)  # [B, C, grid_h, grid_w]
+        return lr_features
+        
 
     @torch.no_grad()
     def _init_zeroshot_classifier(self):
