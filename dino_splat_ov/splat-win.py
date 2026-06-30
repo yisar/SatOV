@@ -32,17 +32,14 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
 
 # =========================
-# 2. 输入图像和类别分组（支持同义词）
+# 2. 输入图像和类别分组
 # =========================
-image_path = "asset/img.jpg"
+image_path = "asset/9.png"
 image = Image.open(image_path).convert("RGB")
 orig_w, orig_h = image.size
 H_img, W_img = orig_h, orig_w
 
-# -------------------- 修改开始 --------------------
-# 定义同义词分组：每个子列表代表一个语义类别
 class_groups = [
-    # ["background"],
     ["bareland", "barren"],
     ["pavement"],
     ["road"],
@@ -50,12 +47,11 @@ class_groups = [
     ["river", "water"],
     ["grass"],
     ["field"],
-    ["building", "house", "roof"],  # 主词 building，同义词 house, roof
+    ["building", "house", "roof"],
 ]
 
-# 展平所有文本，用于编码
 flat_texts = []
-group_index_maps = []  # 记录每个组对应 flat_texts 中的索引列表
+group_index_maps = []
 for group in class_groups:
     start = len(flat_texts)
     flat_texts.extend(group)
@@ -63,16 +59,14 @@ for group in class_groups:
     group_index_maps.append(list(range(start, end)))
 
 texts = [f"a photo of {c}" for c in flat_texts]
-num_classes = len(class_groups)  # 最终输出的类别数（合并后）
-num_flat = len(flat_texts)  # 原始文本总数（含同义词）
-# -------------------- 修改结束 --------------------
+num_classes = len(class_groups)
+num_flat = len(flat_texts)
 
 # =========================
 # 3. Sliding window preparation
 # =========================
-win_size = 224
-stride = 112
-
+win_size = 448
+stride = 224
 
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
@@ -87,7 +81,6 @@ def pad_to_multiple(img, win_size, stride):
     )
     return img_padded, pad_top, pad_left
 
-
 img_np = np.array(image)
 img_padded, pad_top, pad_left = pad_to_multiple(img_np, win_size, stride)
 H_pad, W_pad = img_padded.shape[:2]
@@ -99,13 +92,12 @@ for y in range(0, H_pad - win_size + 1, stride):
         windows.append((win, y - pad_top, x - pad_left))
 
 # =========================
-# 4. Preprocessing function for patches
+# 4. Preprocessing
 # =========================
 mean = [0.485, 0.456, 0.406]
 std = [0.229, 0.224, 0.225]
 normalize = Normalize(mean, std)
 to_tensor = ToTensor()
-
 
 def preprocess_patch(patch_np):
     patch_pil = Image.fromarray(patch_np)
@@ -113,37 +105,20 @@ def preprocess_patch(patch_np):
     tensor = normalize(tensor)
     return tensor.unsqueeze(0).to(device)
 
-
 # =========================
 # 5. Tokenize all flattened texts globally
 # =========================
 text_tokens = tokenizer.tokenize(texts).to(device)
 
 # =========================
-# 6. Accumulators on GPU (shape: [num_classes, H, W])
+# 6. 收集所有窗口的数据（不累加）
 # =========================
-acc_logits = torch.zeros(
-    (num_classes, H_img, W_img), dtype=torch.float32, device=device
-)
-acc_weights = torch.zeros((H_img, W_img), dtype=torch.float32, device=device)
+all_img_feats = []      # 存储低分辨率特征 [1, D, h, w]
+all_up_probs = []       # 存储上采样后的概率 [num_classes, 224, 224]
+all_positions = []      # (y0, x0)
 
-
-# Gaussian weight for window fusion (centered)
-def get_gaussian_weight(size, sigma=0.5):
-    ax = torch.linspace(-1, 1, size, device=device)
-    xx, yy = torch.meshgrid(ax, ax, indexing="ij")
-    w = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-    return w
-
-
-gauss_weight = get_gaussian_weight(win_size, sigma=0.5)
-
-# =========================
-# 7. Sliding window processing
-# =========================
 with torch.no_grad():
     for win_np, y0, x0 in windows:
-        # Skip windows entirely outside original image
         if y0 >= H_img or x0 >= W_img or y0 + win_size <= 0 or x0 + win_size <= 0:
             continue
 
@@ -155,53 +130,34 @@ with torch.no_grad():
         h = w = int(P**0.5)
         img_feat = image_patch_tokens.transpose(1, 2).reshape(B, D, h, w)
 
-        # 编码所有展平后的文本（含同义词）
+        # 文本特征
         text_feat = model.encode_text(text_tokens)[:, 1024:]  # [num_flat, D]
         img_feat = F.normalize(img_feat, dim=1)
         text_feat = F.normalize(text_feat, dim=-1)
 
-        # 1. 先计算所有独立文本的 Logits
-        logits_flat = torch.einsum(
-            "bchw,nc->bnhw", img_feat, text_feat
-        )  # [1, num_flat, h, w]
+        # 独立文本 logits
+        logits_flat = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)  # [1, num_flat, h, w]
 
-        # ====================== 修改开始（加权合并同义词） ======================
-        # 2. 根据同义词分组合并 Logits（加权平均，主词权重大）
+        # 同义词合并
         merged_logits = []
         for idx_list in group_index_maps:
-            # 第一个索引为主词，其余为同义词
-            # 权重：主词 1.0，同义词 0.3（可调）
             weights = [1.0] + [0.3] * (len(idx_list) - 1)
-            # 计算加权和
             weighted_sum = torch.zeros_like(logits_flat[:, idx_list[0], :, :])
             for i, idx in enumerate(idx_list):
                 weighted_sum += logits_flat[:, idx, :, :] * weights[i]
-            # 归一化权重，保持量级不变
             group_logit = weighted_sum / sum(weights)
-            merged_logits.append(group_logit.unsqueeze(1))  # [1, 1, h, w]
+            merged_logits.append(group_logit.unsqueeze(1))
         logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
-        # ====================== 修改结束 ======================
 
-        # 3. 计算概率（此时类别数 = num_classes）
+        # 概率
         prob = torch.softmax(logits / 0.07, dim=1)  # [1, num_classes, h, w]
 
-        # Gaussian JBU upsampling to win_size
-        prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(
-            0
-        )  # [1, h*w, num_classes]
-        patch_coords_lr = (
-            create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
-        )
-        patch_coords_hr = (
-            create_coordinate_grid_2d(win_size, win_size, device)
-            .reshape(-1, 2)
-            .unsqueeze(0)
-        )
+        # Gaussian JBU upsampling
+        prob_lr = rearrange(prob[0], "c h w -> (h w) c").unsqueeze(0)
+        patch_coords_lr = create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
+        patch_coords_hr = create_coordinate_grid_2d(win_size, win_size, device).reshape(-1, 2).unsqueeze(0)
 
-        # RGB guidance (low-res and high-res)
-        image_lr = F.interpolate(
-            win_tensor, size=(h, w), mode="bilinear", align_corners=False
-        )
+        image_lr = F.interpolate(win_tensor, size=(h, w), mode="bilinear", align_corners=False)
         pixels_lr = rearrange(image_lr, "b c h w -> b (h w) c")
         pixels_hr = rearrange(win_tensor, "b c h w -> b (h w) c")
 
@@ -212,80 +168,95 @@ with torch.no_grad():
             pixels_hr=pixels_hr,
         ).to(device)
         upsampled = upsampler.forward(prob_lr)  # [1, win_size*win_size, num_classes]
-        up_prob = upsampled.reshape(1, win_size, win_size, num_classes).permute(
-            0, 3, 1, 2
-        )  # [1, num_classes, 224, 224]
+        up_prob = upsampled.reshape(1, win_size, win_size, num_classes).permute(0, 3, 1, 2)  # [1, num_classes, 224, 224]
         up_prob = up_prob.squeeze(0)  # [num_classes, 224, 224]
 
-        # Crop overlapping region in original image coordinates
-        y_start = max(0, y0)
-        y_end = min(H_img, y0 + win_size)
-        x_start = max(0, x0)
-        x_end = min(W_img, x0 + win_size)
-        if y_start >= y_end or x_start >= x_end:
-            continue
-
-        crop_y1 = y_start - y0
-        crop_y2 = crop_y1 + (y_end - y_start)
-        crop_x1 = x_start - x0
-        crop_x2 = crop_x1 + (x_end - x_start)
-
-        win_prob_crop = up_prob[:, crop_y1:crop_y2, crop_x1:crop_x2]
-        win_weight_crop = gauss_weight[crop_y1:crop_y2, crop_x1:crop_x2]
-
-        # Weighted accumulation
-        acc_logits[:, y_start:y_end, x_start:x_end] += win_prob_crop * win_weight_crop
-        acc_weights[y_start:y_end, x_start:x_end] += win_weight_crop
+        # 存储
+        all_img_feats.append(img_feat.cpu())      # 先移到CPU防止显存爆炸
+        all_up_probs.append(up_prob.cpu())
+        all_positions.append((y0, x0))
 
 # =========================
-# 8. Final logits and smoothing
+# 7. 计算跨窗口注意力权重（GLA核心）
 # =========================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+all_img_feats = [f.to(device) for f in all_img_feats]
+all_img_feats = torch.cat(all_img_feats, dim=0)  # [N, D, h, w]
+N, D, h, w = all_img_feats.shape
+
+# 全局锚点：所有窗口所有像素的平均
+global_anchor = all_img_feats.mean(dim=(0, 2, 3), keepdim=True)  # [1, D, 1, 1]
+
+# 展平每个窗口的特征为 Key
+keys = all_img_feats.flatten(start_dim=2)  # [N, D, h*w]
+scores = torch.einsum('d, n d l -> n l', global_anchor.squeeze(), keys)  # [N, h*w]
+attn = F.softmax(scores / 0.07, dim=0)  # [N, h*w]  对窗口维度 softmax
+
+# 重塑为 [N, 1, h, w]
+attn_maps = attn.reshape(N, 1, h, w)  # [N, 1, h, w]
+# 上采样到 224x224
+attn_maps_224 = F.interpolate(attn_maps, size=(win_size, win_size), mode='bilinear')  # [N, 1, 224, 224]
+
+# =========================
+# 8. 用注意力权重重新累加融合
+# =========================
+acc_logits = torch.zeros((num_classes, H_img, W_img), dtype=torch.float32, device=device)
+acc_weights = torch.zeros((H_img, W_img), dtype=torch.float32, device=device)
+
+for idx, (y0, x0) in enumerate(all_positions):
+    up_prob = all_up_probs[idx].to(device)          # [num_classes, 224, 224]
+    attn_map = attn_maps_224[idx]                   # [1, 224, 224]
+
+    # 裁剪到原图有效区域
+    y_start = max(0, y0)
+    y_end = min(H_img, y0 + win_size)
+    x_start = max(0, x0)
+    x_end = min(W_img, x0 + win_size)
+    crop_y1 = y_start - y0
+    crop_y2 = crop_y1 + (y_end - y_start)
+    crop_x1 = x_start - x0
+    crop_x2 = crop_x1 + (x_end - x_start)
+
+    win_prob_crop = up_prob[:, crop_y1:crop_y2, crop_x1:crop_x2]
+    win_weight_crop = attn_map[:, crop_y1:crop_y2, crop_x1:crop_x2]  # [1, Hc, Wc]
+
+    acc_logits[:, y_start:y_end, x_start:x_end] += win_prob_crop * win_weight_crop
+    acc_weights[y_start:y_end, x_start:x_end] += win_weight_crop.squeeze(0)
+
+# 归一化
 acc_weights = acc_weights.clamp(min=1e-6)
 final_logits = acc_logits / acc_weights  # [num_classes, H, W]
 final_logits = final_logits.unsqueeze(0)  # [1, num_classes, H, W]
 
-# Depthwise Gaussian smoothing kernel (3x3)
+# 深度可分离高斯平滑（与原代码一致）
 kernel = (
     torch.tensor(
         [[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=torch.float32, device=device
     ).view(1, 1, 3, 3)
     / 16
 )
-kernel = kernel.repeat(num_classes, 1, 1, 1)  # [num_classes, 1, 3, 3]
+kernel = kernel.repeat(num_classes, 1, 1, 1)
 final_logits_smooth = F.conv2d(
     final_logits, weight=kernel, padding=1, groups=num_classes
 )
 
-# Convert to numpy and argmax
 final_logits_np = final_logits_smooth.squeeze(0).cpu().numpy()  # [num_classes, H, W]
-mask = np.argmax(final_logits_np, axis=0)  # [H, W]
-
-# Optional median filter to remove small isolated blobs
+mask = np.argmax(final_logits_np, axis=0)
 mask = median_filter(mask, size=3)
 
 # =========================
-# 9. Visualization (自动适配类别数)
+# 9. 可视化
 # =========================
-# 预定义调色板（8种颜色，可自行扩展）
 preset_palette = [
-    (72, 40, 120),
-    (62, 74, 137),
-    (49, 104, 142),
-    (38, 130, 142),
-    (31, 158, 137),
-    (73, 193, 110),
-    (160, 218, 57),
-    (253, 231, 37),
+    (72, 40, 120), (62, 74, 137), (49, 104, 142), (38, 130, 142),
+    (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37),
 ]
 preset_palette = np.array(preset_palette) / 255.0
-
 if num_classes <= len(preset_palette):
     palette = preset_palette[:num_classes]
 else:
-    # 如果类别数超过预设，从 matplotlib 颜色映射中取色
     cmap = plt.cm.get_cmap("tab20", num_classes)
     palette = np.array([cmap(i)[:3] for i in range(num_classes)])
-
 cmap = ListedColormap(palette)
 
 plt.figure(figsize=(10, 5))
@@ -296,7 +267,6 @@ plt.axis("off")
 
 plt.subplot(1, 2, 2)
 plt.imshow(mask, cmap=cmap, vmin=0, vmax=num_classes - 1)
-plt.title("Sliding Window + Gaussian Splatting")
+plt.title("GLA + Gaussian Splatting")
 plt.axis("off")
-
 plt.show()
