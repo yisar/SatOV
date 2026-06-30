@@ -20,14 +20,6 @@ from pydensecrf.utils import (
 from model import DenseClip
 
 
-def get_gaussian_mask(size, sigma=0.4):
-    """生成中心权重高、边缘权重低的高斯矩阵，用于平滑接缝"""
-    coords = torch.arange(size).float() - (size - 1) / 2
-    g = torch.exp(-(coords**2) / (2 * (sigma * size) ** 2))
-    mask = g.view(-1, 1) @ g.view(1, -1)
-    return mask / mask.max()
-
-
 def apply_dense_crf(img_np, probs_np):
     """
     使用 Dense CRF 优化分割结果
