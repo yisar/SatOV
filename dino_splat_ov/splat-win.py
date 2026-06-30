@@ -16,13 +16,13 @@ from scipy.ndimage import median_filter
 root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
 
-from dinov3.data.transforms import make_classification_eval_transform
-from dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
+from dino_splat_ov.dinov3.data.transforms import make_classification_eval_transform
+from dino_splat_ov.dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
 
 # =========================
 # Gaussian JBU
 # =========================
-from splatov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
+from dino_splat_ov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
 
 # =========================
 # 1. Load model
