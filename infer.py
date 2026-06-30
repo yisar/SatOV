@@ -83,102 +83,132 @@ def infer_single_image(
     use_crf: bool = True,
     show_plot: bool = False
 ):
-    """
-    单张影像推理封装函数
-    :param img_path: 输入图片路径
-    :param out_save_path: 分割结果保存路径
-    :param model: 加载好的DenseClip模型
-    :param device: cuda/cpu
-    :param window_size: 滑动窗口尺寸
-    :param stride: 滑动步长
-    :param classnames: 类别名称列表
-    :param custom_palette: 类别配色RGB列表
-    :param use_crf: 是否启用DenseCRF后处理
-    :param show_plot: 是否弹出matplotlib可视化窗口
-    :return: None
-    """
     win = window_size
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082), (0.2686, 0.2613, 0.2757))
     legend_colors = [tuple(ch / 255 for ch in rgb) for rgb in custom_palette]
-
 
     with Image.open(img_path, "r").convert("RGB") as raw_image:
         w, h = raw_image.size
         img_np = np.array(raw_image)
         img_tensor = TF.to_tensor(raw_image).multiply(255).to(torch.uint8)
 
-        # 初始化全局累加器
-        full_probs = torch.zeros((len(classnames), h, w), device=device)
-        weight_sum = torch.zeros((1, h, w), device=device)
-        g_mask = get_gaussian_mask(win).to(device)
+        all_probs = []
+        all_features = []
+        all_positions = []
 
-        # 采样点逻辑
         y_steps = list(range(0, h - win, stride)) + [h - win]
         x_steps = list(range(0, w - win, stride)) + [w - win]
-
         print(f">>> {os.path.basename(img_path)}: 滑动窗口 {len(y_steps)}x{len(x_steps)} 切片")
+
         for y in y_steps:
             for x in x_steps:
                 crop = raw_image.crop((x, y, x + win, y + win))
-
-                # CLIP分支输入
                 input_clip = transforms.Compose([
                     transforms.Resize((win, win)),
                     transforms.ToTensor(),
                     clip_norm,
                 ])(crop).unsqueeze(0).to(device)
 
-                # HR引导分支输入
                 input_guide = transforms.Compose([
                     transforms.Resize((win * 2, win * 2)),
                     transforms.ToTensor(),
                     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ])(crop).unsqueeze(0).to(device)
 
-                # 前向推理
+                # 低分辨率特征 [1, D, Hf, Wf]
+                feat = model.extract_patch_features(input_clip)
+                all_features.append(feat.squeeze(0).cpu())
+
+                # 高分辨率概率图 [C, win, win]
                 output = model(input_clip, hr_guide=input_guide)
-                output = F.interpolate(output, size=(win, win), mode="bilinear")
+                output = F.interpolate(output, size=(win, win), mode='bilinear')
                 probs = F.softmax(output, dim=1).squeeze(0)
+                all_probs.append(probs.cpu())
+                all_positions.append((y, x))
 
-                # 高斯加权融合
-                full_probs[:, y:y+win, x:x+win] += probs * g_mask
-                weight_sum[:, y:y+win, x:x+win] += g_mask
+        # =========================================================
+        #  GLA 计算（改进版）
+        # =========================================================
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        all_features = [f.to(device) for f in all_features]
+        all_feats = torch.stack(all_features, dim=0)   # [N, D, Hf, Wf]
+        N, D, Hf, Wf = all_feats.shape
 
-        # 归一化融合概率图
-        full_probs /= weight_sum.clamp(min=1e-6)
+        # 1. 全局锚点（归一化）
+        global_anchor = all_feats.mean(dim=(0, 2, 3), keepdim=True)  # [1,D,1,1]
+        global_anchor = F.normalize(global_anchor, dim=1)            # L2 归一化
+
+        # 2. 展平并归一化 keys
+        keys = all_feats.flatten(start_dim=2)  # [N, D, Hf*Wf]
+        keys = F.normalize(keys, dim=1)        # 沿 D 维归一化
+
+        # 3. 相似度（点积）
+        scores = torch.einsum('d, n d l -> n l', global_anchor.squeeze(), keys)  # [N, Hf*Wf]
+
+        # 4. 温度调整（0.3 使权重更平滑）
+        attn = F.softmax(scores / 0.3, dim=0)  # [N, Hf*Wf]
+
+        # 5. 重塑 + 上采样
+        attn_maps = attn.reshape(N, 1, Hf, Wf)
+        attn_maps_win = F.interpolate(attn_maps, size=(win, win), mode='bilinear')
+
+        # 6. 高斯平滑消除网格
+        kernel = torch.tensor([[1,2,1],[2,4,2],[1,2,1]], dtype=torch.float32, device=device) / 16.0
+        kernel = kernel.view(1, 1, 3, 3)
+        attn_maps_win = F.conv2d(attn_maps_win, kernel, padding=1)
+
+        # =========================================================
+        #  加权融合（增加局部权重平滑）
+        # =========================================================
+        C = len(classnames)
+        acc_probs = torch.zeros((C, h, w), dtype=torch.float32, device=device)
+        acc_weights = torch.zeros((h, w), dtype=torch.float32, device=device)
+
+        for idx, (y, x) in enumerate(all_positions):
+            prob = all_probs[idx].to(device)          # [C, win, win]
+            attn_map = attn_maps_win[idx]             # [1, win, win]
+            # 增加一个小 epsilon 防止权重为0
+            attn_map = attn_map + 1e-4
+            acc_probs[:, y:y+win, x:x+win] += prob * attn_map
+            acc_weights[y:y+win, x:x+win] += attn_map.squeeze(0)
+
+        acc_weights = acc_weights.clamp(min=1e-6)
+        full_probs = acc_probs / acc_weights
+
+        # =========================================================
+        #  背景抑制（假设背景是第一个类别）
+        # =========================================================
+        if classnames[0].lower() in ['background', 'bg']:
+            full_probs[0] = full_probs[0] * 0.8   # 降低背景置信度
+            # 重新归一化
+            full_probs = full_probs / full_probs.sum(dim=0, keepdim=True).clamp(min=1e-6)
+
         probs_np = full_probs.cpu().numpy()
 
-        # CRF后处理
+        # =========================================================
+        #  后处理（CRF 等）
+        # =========================================================
         if use_crf:
-            print(f">>> {os.path.basename(img_path)} 执行Dense CRF优化...")
+            print(f">>> {os.path.basename(img_path)} 执行 Dense CRF 优化...")
             probs_np = apply_dense_crf(img_np, probs_np)
 
-        # 生成分割掩码
         max_idx = probs_np.argmax(axis=0)
-        masks = torch.stack([torch.from_numpy(max_idx == i) for i in range(len(classnames))])
+        masks = torch.stack([torch.from_numpy(max_idx == i) for i in range(C)])
 
-        # 渲染分割图并保存
         seg_result = draw_segmentation_masks(img_tensor, masks, colors=custom_palette, alpha=1.0)
         seg_result_pil = TF.to_pil_image(seg_result)
         seg_result_pil.save(out_save_path)
         print(f">>> 保存分割结果: {out_save_path}")
 
-        # 可视化绘图
         if show_plot:
             fig, ax = plt.subplots(1, 2, figsize=(20, 10))
             ax[0].imshow(raw_image)
             ax[0].set_title("Original Image")
             ax[0].axis("off")
-
             ax[1].imshow(seg_result.permute(1, 2, 0).numpy())
-            ax[1].set_title("Predict Result")
+            ax[1].set_title("GLA + SatUp (smoothed)")
             ax[1].axis("off")
-
-            # 图例
-            patches = [
-                mpatches.Patch(color=legend_colors[i], label=classnames[i])
-                for i in range(len(classnames))
-            ]
+            patches = [mpatches.Patch(color=legend_colors[i], label=classnames[i]) for i in range(C)]
             fig.legend(handles=patches, loc="center right", title="Land Cover Classes")
             plt.subplots_adjust(right=0.88)
             plt.show()
