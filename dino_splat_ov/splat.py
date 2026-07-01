@@ -46,7 +46,7 @@ class_groups = [
     ["forest", "tree"],
     ["river", "water"],
     ["grass"],
-    ["field"],
+    ["field", "farmland", "crop"],
     ["building", "house", "roof"],
 ]
 
