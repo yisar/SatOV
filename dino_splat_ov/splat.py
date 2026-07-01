@@ -34,7 +34,7 @@ model = model.to(device).eval()
 # =========================
 # 2. 输入图像和类别分组
 # =========================
-image_path = "asset/img.jpg"
+image_path = "asset/img3.jpg"
 image = Image.open(image_path).convert("RGB")
 orig_w, orig_h = image.size
 H_img, W_img = orig_h, orig_w
@@ -46,7 +46,7 @@ class_groups = [
     ["forest", "tree"],
     ["river", "water"],
     ["grass"],
-    ["field", "farmland", "farm"],
+    ["field", "cropland"],
     ["building", "house", "roof"],
 ]
 
@@ -65,8 +65,8 @@ num_flat = len(flat_texts)
 # =========================
 # 3. Sliding window preparation
 # =========================
-win_size = 256
-stride = 128
+win_size = 224
+stride = 112
 
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
@@ -223,22 +223,9 @@ for idx, (y0, x0) in enumerate(all_positions):
 # 归一化得到最终 logits
 final_logits = acc_weighted_logits / (acc_exp_weights.clamp(min=1e-6))  # [num_classes, H, W]
 
-# =========================
-# 8. 深度可分离高斯平滑（可选）
-# =========================
-kernel = (
-    torch.tensor(
-        [[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=torch.float32, device=device
-    ).view(1, 1, 3, 3)
-    / 16
-)
-kernel = kernel.repeat(num_classes, 1, 1, 1)
-final_logits_smooth = F.conv2d(
-    final_logits.unsqueeze(0), weight=kernel, padding=1, groups=num_classes
-).squeeze(0)  # [num_classes, H, W]
 
 # 转为概率并生成掩膜
-final_probs = F.softmax(final_logits_smooth, dim=0)  # [num_classes, H, W]
+final_probs = F.softmax(final_logits, dim=0)  # [num_classes, H, W]
 final_probs_np = final_probs.cpu().numpy()
 mask = np.argmax(final_probs_np, axis=0)
 mask = median_filter(mask, size=3)  # 可选
