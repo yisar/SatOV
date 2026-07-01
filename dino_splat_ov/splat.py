@@ -188,12 +188,20 @@ acc_exp_weights = torch.zeros((H_img, W_img), dtype=torch.float32, device=device
 
 temperature = 0.07  # 可调，控制权重分布的尖锐程度
 
+# ---- 新增：生成二维汉宁窗 ----
+hann_1d = torch.hann_window(win_size, device=device)          # [win_size]
+hann_2d = torch.outer(hann_1d, hann_1d)                      # [win_size, win_size]
+# ------------------------------
+
 for idx, (y0, x0) in enumerate(all_positions):
     up_logits = all_up_logits[idx].to(device)          # [num_classes, 224, 224]
     up_weight = all_up_weights[idx].to(device)         # [224, 224]
 
     # 计算 exp(weight / temperature)
     exp_w = torch.exp(up_weight / temperature)
+    # ---- 新增：乘以汉宁窗（空间平滑） ----
+    exp_w = exp_w * hann_2d
+    # ------------------------------
 
     # 裁剪到原图有效区域
     y_start = max(0, y0)
@@ -258,6 +266,6 @@ plt.axis("off")
 
 plt.subplot(1, 2, 2)
 plt.imshow(mask, cmap=cmap, vmin=0, vmax=num_classes - 1)
-plt.title("Text-Prior Attention + Logits Fusion")
+plt.title("Text-Prior Attention + Logits Fusion (Hann window)")
 plt.axis("off")
 plt.show()
