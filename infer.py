@@ -144,22 +144,21 @@ def infer_single_image(
         attn_maps = attn.reshape(N, 1, Hf, Wf)
         attn_maps_win = F.interpolate(attn_maps, size=(win, win), mode='bilinear')
 
-        # 6. 高斯平滑消除网格
-        kernel = torch.tensor([[1,2,1],[2,4,2],[1,2,1]], dtype=torch.float32, device=device) / 16.0
-        kernel = kernel.view(1, 1, 3, 3)
-        attn_maps_win = F.conv2d(attn_maps_win, kernel, padding=1)
-
-        # =========================================================
-        #  加权融合（增加局部权重平滑）
-        # =========================================================
         C = len(classnames)
         acc_probs = torch.zeros((C, h, w), dtype=torch.float32, device=device)
         acc_weights = torch.zeros((h, w), dtype=torch.float32, device=device)
 
+        # ---- 新增：生成二维汉宁窗 ----
+        hann_1d = torch.hann_window(win, device=device)        # [win]
+        hann_2d = torch.outer(hann_1d, hann_1d)                # [win, win]
+        # ------------------------------
+
         for idx, (y, x) in enumerate(all_positions):
             prob = all_probs[idx].to(device)          # [C, win, win]
             attn_map = attn_maps_win[idx]             # [1, win, win]
-            # 增加一个小 epsilon 防止权重为0
+            # ---- 新增：乘以汉宁窗（空间平滑） ----
+            attn_map = attn_map * hann_2d
+            # --------------------------------------
             attn_map = attn_map + 1e-4
             acc_probs[:, y:y+win, x:x+win] += prob * attn_map
             acc_weights[y:y+win, x:x+win] += attn_map.squeeze(0)
