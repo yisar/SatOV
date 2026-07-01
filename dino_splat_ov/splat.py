@@ -151,12 +151,11 @@ with torch.no_grad():
 
         # ========== 核心修改：计算差异图（最优路径 / Wasserstein 简化版） ==========
         # 1) 将 logits 转为概率分布（温度=1.0）
-        # 3) 每个类别的偏差绝对值（即与均匀分布的距离）
-        prob = torch.softmax(logits, dim=1)
+        prob = torch.softmax(logits, dim=1)  # [1, num_classes, h, w]
+        # 2) 均匀分布
         uniform = 1.0 / num_classes
-
-        # 只保留高于均匀分布的部分
-        diff = torch.relu(prob - uniform)  # [1, num_classes, h, w]
+        # 3) 每个类别的偏差绝对值（即与均匀分布的距离）
+        diff = torch.clamp(prob - uniform, min=0)
         # 现在 diff 替代 prob 作为后续上采样的输入
         # ========================================================================
 
@@ -199,8 +198,6 @@ global_anchor = all_img_feats.mean(dim=(0, 2, 3), keepdim=True)  # [1, D, 1, 1]
 keys = all_img_feats.flatten(start_dim=2)  # [N, D, h*w]
 scores = torch.einsum('d, n d l -> n l', global_anchor.squeeze(), keys)  # [N, h*w]
 attn = F.softmax(scores / 0.07, dim=0)  # [N, h*w]  对窗口维度 softmax
-# attn = torch.sigmoid(scores)
-# attn = attn / (attn.sum(dim=0, keepdim=True) + 1e-6)
 
 # 重塑为 [N, 1, h, w]
 attn_maps = attn.reshape(N, 1, h, w)  # [N, 1, h, w]
