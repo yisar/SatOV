@@ -11,6 +11,61 @@ from torchvision.transforms import Normalize, ToTensor
 from scipy.ndimage import median_filter
 
 # =========================
+# 新增：基于DINO亲和力的图拉普拉斯平滑（LPOSS思路）
+# =========================
+def graph_laplacian_smooth(
+    logits: torch.Tensor,
+    features: torch.Tensor,
+    num_iter: int = 3,
+    alpha: float = 0.6,
+    temperature: float = 0.1,
+    kernel_size: int = 3
+) -> torch.Tensor:
+    """
+    基于DINO视觉特征亲和力的迭代式图拉普拉斯平滑（等价于标签传播）
+    对应LPOSS中用DINO特征做语义正则化的核心逻辑，仅在低分辨率patch阶段执行
+    Args:
+        logits: 初始分割logits [C, H, W]
+        features: DINO归一化视觉特征 [D, H, W]
+        num_iter: 平滑迭代次数
+        alpha: 原始logits保留权重，越大平滑越弱
+        temperature: 相似度温度，越小边缘保留越好
+        kernel_size: 局部邻域大小，默认3即8邻域
+    Returns:
+        smoothed_logits: 平滑后logits [C, H, W]
+    """
+    C, H, W = logits.shape
+    pad = kernel_size // 2
+
+    # 镜像填充避免边缘失真
+    feat_pad = F.pad(features.unsqueeze(0), (pad, pad, pad, pad), mode="reflect").squeeze(0)
+    
+    # 提取邻域特征块 [D, K², H, W]
+    feat_unfold = F.unfold(feat_pad.unsqueeze(0), kernel_size=kernel_size, padding=0)
+    feat_unfold = feat_unfold.reshape(features.shape[0], kernel_size * kernel_size, H, W)
+
+    # 计算中心-邻域余弦相似度（特征已归一化，点积即余弦）
+    similarity = torch.einsum("dnhw,dhw->nhw", feat_unfold, features)  # [K², H, W]
+    
+    # 温度缩放得到亲和力权重，行归一化
+    affinity = torch.exp(similarity / temperature)
+    affinity = affinity / affinity.sum(dim=0, keepdim=True)  # [K², H, W]
+
+    # 迭代式拉普拉斯平滑
+    current_logits = logits.clone()
+    for _ in range(num_iter):
+        current_pad = F.pad(current_logits.unsqueeze(0), (pad, pad, pad, pad), mode="reflect").squeeze(0)
+        current_unfold = F.unfold(current_pad.unsqueeze(0), kernel_size=kernel_size, padding=0)
+        current_unfold = current_unfold.reshape(C, kernel_size * kernel_size, H, W)
+
+        # 邻域加权平均
+        neighbor_avg = torch.einsum("cnhw,nhw->chw", current_unfold, affinity)
+        # 更新：保留原始信息 + 邻域平滑
+        current_logits = alpha * current_logits + (1 - alpha) * neighbor_avg
+
+    return current_logits
+
+# =========================
 # DINOv3
 # =========================
 root_path = Path(__file__).parent.parent
@@ -34,7 +89,7 @@ model = model.to(device).eval()
 # =========================
 # 2. 输入图像和类别分组
 # =========================
-image_path = "asset/img3.jpg"
+image_path = "asset/img.jpg"
 image = Image.open(image_path).convert("RGB")
 orig_w, orig_h = image.size
 H_img, W_img = orig_h, orig_w
@@ -151,6 +206,18 @@ with torch.no_grad():
             group_logit = weighted_sum / sum(weights)
             merged_logits.append(group_logit.unsqueeze(1))
         logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
+
+        # =========================
+        # 新增：DINO亲和力图拉普拉斯平滑（LPOSS思路）
+        # =========================
+        logits_smooth = graph_laplacian_smooth(
+            logits=logits.squeeze(0),      # [num_classes, h, w]
+            features=img_feat.squeeze(0),  # [D, h, w] 复用DINOv3原生patch特征
+            num_iter=3,
+            alpha=0.6,
+            temperature=0.1
+        )
+        logits = logits_smooth.unsqueeze(0)  # 恢复 [1, num_classes, h, w] 维度，后续逻辑完全不变
 
         # --- 方案4：用 Gaussian JBU 上采样 logits ---
         logits_lr = rearrange(logits[0], "c h w -> (h w) c").unsqueeze(0)  # [1, h*w, num_classes]
