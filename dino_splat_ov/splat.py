@@ -59,8 +59,7 @@ model = model.to(device).eval()
 # 类别分组（可自定义）
 # =========================
 class_groups = [
-    ["bareland", "barren"],
-    ["pavement"],
+    ["pavement","bareland", "barren"],
     ["road"],
     ["forest", "tree"],
     ["river", "water"],
@@ -83,8 +82,8 @@ num_classes = len(class_groups)
 # =========================
 # 滑动窗口参数
 # =========================
-win_size = 334
-stride = 167
+win_size = 256
+stride = 128
 
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
@@ -254,7 +253,8 @@ def predict_image(image_path, output_path=None, show=False):
 
     # 彩色掩膜
     preset_palette = [
-        (72, 40, 120), (62, 74, 137), (49, 104, 142), (38, 130, 142),
+        # (72, 40, 120),
+          (62, 74, 137), (49, 104, 142), (38, 130, 142),
         (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37),
     ]
     preset_palette = np.array(preset_palette)
