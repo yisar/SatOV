@@ -29,7 +29,8 @@ model = model.to(device).eval()
 # 类别分组（可自定义）
 # =========================
 class_groups = [
-    ["pavement", "bareland", "barren"],
+    ["pavement","sidewalk"],
+    ["bareland", "barren"],
     ["road"],
     ["forest", "tree"],
     ["river", "water"],
@@ -40,6 +41,7 @@ class_groups = [
 
 # 彩色掩膜
 preset_palette = [
+    (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
@@ -86,6 +88,7 @@ tlp.bind_text(group_text_feats)
 win_size = 256
 stride = 128
 
+
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
     pad_h = (win_size - h) % stride if h < win_size else (win_size - h) % stride
@@ -99,6 +102,7 @@ def pad_to_multiple(img, win_size, stride):
     )
     return img_padded, pad_top, pad_left
 
+
 def preprocess_patch(patch_np):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -108,6 +112,7 @@ def preprocess_patch(patch_np):
     tensor = to_tensor(patch_pil)
     tensor = normalize(tensor)
     return tensor.unsqueeze(0).to(device)
+
 
 # =========================
 # 核心预测函数
@@ -157,7 +162,9 @@ def predict_image(image_path, output_path=None, show=False):
             # 计算与扁平文本的相似度
             text_feat = F.normalize(text_feat_all, dim=-1)
             img_feat = F.normalize(img_feat, dim=1)
-            logits_flat = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)  # [1, num_flat, h, w]
+            logits_flat = torch.einsum(
+                "bchw,nc->bnhw", img_feat, text_feat
+            )  # [1, num_flat, h, w]
 
             # 合并为分组 logits
             merged_logits = []
@@ -172,11 +179,22 @@ def predict_image(image_path, output_path=None, show=False):
 
             # ---- 使用 TLP 平滑（替换原有的 graph_laplacian_smooth） ----
             # 准备原始图像 patch，范围 [0,1]，形状 [1,3,win_size,win_size]
-            img_patch = torch.from_numpy(win_np).float().permute(2, 0, 1).unsqueeze(0).to(device) / 255.0
+            img_patch = (
+                torch.from_numpy(win_np)
+                .float()
+                .permute(2, 0, 1)
+                .unsqueeze(0)
+                .to(device)
+                / 255.0
+            )
             # 重要：将图像下采样到与 logits 相同的空间尺寸 (h, w)
-            img_patch_lr = F.interpolate(img_patch, size=(h, w), mode='bilinear', align_corners=False)
+            img_patch_lr = F.interpolate(
+                img_patch, size=(h, w), mode="bilinear", align_corners=False
+            )
             # 应用 TLP（已经绑定文本特征）
-            logits_smooth = tlp(image=img_patch_lr, logits=logits)  # [1, num_classes, h, w]
+            logits_smooth = tlp(
+                image=img_patch_lr, logits=logits
+            )  # [1, num_classes, h, w]
             # -------------------------------------------------------------
 
             # JBU 上采样
@@ -301,6 +319,7 @@ def predict_image(image_path, output_path=None, show=False):
 
     return mask
 
+
 # =========================
 # 命令行入口
 # =========================
@@ -361,6 +380,7 @@ def main():
     else:
         print(f"Input path {input_path} does not exist.")
         return
+
 
 if __name__ == "__main__":
     main()
