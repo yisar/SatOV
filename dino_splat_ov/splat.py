@@ -13,54 +13,14 @@ import argparse
 import os
 import glob
 
-
-# =========================
-# 图拉普拉斯平滑（LPOSS）
-# =========================
-def graph_laplacian_smooth(
-    logits: torch.Tensor,
-    features: torch.Tensor,
-    num_iter: int = 3,
-    alpha: float = 0.6,
-    temperature: float = 0.1,
-    kernel_size: int = 3,
-) -> torch.Tensor:
-    C, H, W = logits.shape
-    pad = kernel_size // 2
-    feat_pad = F.pad(
-        features.unsqueeze(0), (pad, pad, pad, pad), mode="reflect"
-    ).squeeze(0)
-    feat_unfold = F.unfold(feat_pad.unsqueeze(0), kernel_size=kernel_size, padding=0)
-    feat_unfold = feat_unfold.reshape(
-        features.shape[0], kernel_size * kernel_size, H, W
-    )
-    similarity = torch.einsum("dnhw,dhw->nhw", feat_unfold, features)
-    affinity = torch.exp(similarity / temperature)
-    affinity = affinity / affinity.sum(dim=0, keepdim=True)
-    current_logits = logits.clone()
-    for _ in range(num_iter):
-        current_pad = F.pad(
-            current_logits.unsqueeze(0), (pad, pad, pad, pad), mode="reflect"
-        ).squeeze(0)
-        current_unfold = F.unfold(
-            current_pad.unsqueeze(0), kernel_size=kernel_size, padding=0
-        )
-        current_unfold = current_unfold.reshape(C, kernel_size * kernel_size, H, W)
-        neighbor_avg = torch.einsum("cnhw,nhw->chw", current_unfold, affinity)
-        current_logits = alpha * current_logits + (1 - alpha) * neighbor_avg
-    return current_logits
-
-
-# =========================
-# 加载 DINOv3 模型（全局单例）
-# =========================
 root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
-
+from dino_splat_ov.prop import TLP
 from dino_splat_ov.dinov3.data.transforms import make_classification_eval_transform
 from dino_splat_ov.dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
 from dino_splat_ov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
 
+# 加载模型
 model, tokenizer = dinov3_vitl16_dinotxt_tet1280d20h24l()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
@@ -80,7 +40,6 @@ class_groups = [
 
 # 彩色掩膜
 preset_palette = [
-    # (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
@@ -90,6 +49,7 @@ preset_palette = [
     (253, 231, 37),
 ]
 
+# 展开分组信息
 flat_texts = []
 group_index_maps = []
 for group in class_groups:
@@ -102,11 +62,29 @@ texts = [f"a photo of {c}" for c in flat_texts]
 num_classes = len(class_groups)
 
 # =========================
+# 预先计算分组文本特征并绑定到 TLP
+# =========================
+with torch.no_grad():
+    text_tokens_all = tokenizer.tokenize(texts).to(device)
+    text_feat_all = model.encode_text(text_tokens_all)[:, 1024:]  # [num_flat, D]
+    text_feat_all = F.normalize(text_feat_all, dim=-1)
+
+# 按分组聚合（平均）
+group_text_feats = []
+for idx_list in group_index_maps:
+    group_feat = text_feat_all[idx_list].mean(dim=0, keepdim=True)  # [1, D]
+    group_text_feats.append(group_feat)
+group_text_feats = torch.cat(group_text_feats, dim=0)  # [num_classes, D]
+
+# 初始化 TLP 并绑定文本特征
+tlp = TLP(grid=80).to(device)
+tlp.bind_text(group_text_feats)
+
+# =========================
 # 滑动窗口参数
 # =========================
 win_size = 256
 stride = 128
-
 
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
@@ -121,7 +99,6 @@ def pad_to_multiple(img, win_size, stride):
     )
     return img_padded, pad_top, pad_left
 
-
 def preprocess_patch(patch_np):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -131,7 +108,6 @@ def preprocess_patch(patch_np):
     tensor = to_tensor(patch_pil)
     tensor = normalize(tensor)
     return tensor.unsqueeze(0).to(device)
-
 
 # =========================
 # 核心预测函数
@@ -152,10 +128,6 @@ def predict_image(image_path, output_path=None, show=False):
     H_img, W_img = orig_h, orig_w
     img_np = np.array(image)
 
-    # 文本特征（全局一次）
-    with torch.no_grad():
-        text_tokens = tokenizer.tokenize(texts).to(device)
-
     # 滑动窗口
     img_padded, pad_top, pad_left = pad_to_multiple(img_np, win_size, stride)
     H_pad, W_pad = img_padded.shape[:2]
@@ -175,20 +147,19 @@ def predict_image(image_path, output_path=None, show=False):
             if y0 >= H_img or x0 >= W_img or y0 + win_size <= 0 or x0 + win_size <= 0:
                 continue
 
-            win_tensor = preprocess_patch(win_np)
+            win_tensor = preprocess_patch(win_np)  # 归一化张量，用于模型
 
             _, image_patch_tokens, _ = model.encode_image_with_patch_tokens(win_tensor)
             B, P, D = image_patch_tokens.shape
             h = w = int(P**0.5)
             img_feat = image_patch_tokens.transpose(1, 2).reshape(B, D, h, w)
 
-            text_feat = model.encode_text(text_tokens)[:, 1024:]  # [num_flat, D]
+            # 计算与扁平文本的相似度
+            text_feat = F.normalize(text_feat_all, dim=-1)
             img_feat = F.normalize(img_feat, dim=1)
-            text_feat = F.normalize(text_feat, dim=-1)
+            logits_flat = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)  # [1, num_flat, h, w]
 
-            logits_flat = torch.einsum("bchw,nc->bnhw", img_feat, text_feat)
-            raw_weight = logits_flat.max(dim=1)[0]
-
+            # 合并为分组 logits
             merged_logits = []
             for idx_list in group_index_maps:
                 weights = [1.0] + [0.3] * (len(idx_list) - 1)
@@ -197,20 +168,19 @@ def predict_image(image_path, output_path=None, show=False):
                     weighted_sum += logits_flat[:, idx, :, :] * weights[i]
                 group_logit = weighted_sum / sum(weights)
                 merged_logits.append(group_logit.unsqueeze(1))
-            logits = torch.cat(merged_logits, dim=1)
+            logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
 
-            # 图拉普拉斯平滑
-            logits_smooth = graph_laplacian_smooth(
-                logits=logits.squeeze(0),
-                features=img_feat.squeeze(0),
-                num_iter=3,
-                alpha=0.6,
-                temperature=0.1,
-            )
-            logits = logits_smooth.unsqueeze(0)
+            # ---- 使用 TLP 平滑（替换原有的 graph_laplacian_smooth） ----
+            # 准备原始图像 patch，范围 [0,1]，形状 [1,3,win_size,win_size]
+            img_patch = torch.from_numpy(win_np).float().permute(2, 0, 1).unsqueeze(0).to(device) / 255.0
+            # 重要：将图像下采样到与 logits 相同的空间尺寸 (h, w)
+            img_patch_lr = F.interpolate(img_patch, size=(h, w), mode='bilinear', align_corners=False)
+            # 应用 TLP（已经绑定文本特征）
+            logits_smooth = tlp(image=img_patch_lr, logits=logits)  # [1, num_classes, h, w]
+            # -------------------------------------------------------------
 
             # JBU 上采样
-            logits_lr = rearrange(logits[0], "c h w -> (h w) c").unsqueeze(0)
+            logits_lr = rearrange(logits_smooth[0], "c h w -> (h w) c").unsqueeze(0)
             patch_coords_lr = (
                 create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
             )
@@ -239,6 +209,8 @@ def predict_image(image_path, output_path=None, show=False):
                 .squeeze(0)
             )
 
+            # 置信度权重
+            raw_weight = logits_flat.max(dim=1)[0]  # [1, h, w]
             raw_weight_hr = F.interpolate(
                 raw_weight.unsqueeze(0), size=(win_size, win_size), mode="bilinear"
             ).squeeze(0)
@@ -310,11 +282,8 @@ def predict_image(image_path, output_path=None, show=False):
         mask_color[mask == class_id] = palette[class_id]
 
     Image.fromarray(mask_color).save(output_path)
-    # 同时保存灰度标签图
-    # label_path = os.path.splitext(output_path)[0] + "_label.png"
-    # Image.fromarray(mask.astype(np.uint8)).save(label_path)
 
-    # ---------- 可视化（单文件模式） ----------
+    # ---------- 可视化 ----------
     if show:
         plt.figure(figsize=(10, 5))
         plt.subplot(1, 2, 1)
@@ -323,7 +292,6 @@ def predict_image(image_path, output_path=None, show=False):
         plt.axis("off")
 
         plt.subplot(1, 2, 2)
-        # 使用调色板显示
         cmap_display = ListedColormap(np.array(palette) / 255.0)
         plt.imshow(mask, cmap=cmap_display, vmin=0, vmax=num_classes - 1)
         plt.title("Segmentation Mask")
@@ -333,13 +301,12 @@ def predict_image(image_path, output_path=None, show=False):
 
     return mask
 
-
 # =========================
 # 命令行入口
 # =========================
 def main():
     parser = argparse.ArgumentParser(
-        description="DINOv3-based semantic segmentation with text prior."
+        description="DINOv3-based semantic segmentation with text prior and TLP smoothing."
     )
     parser.add_argument(
         "--input",
@@ -358,19 +325,19 @@ def main():
     output_path = args.output
 
     if os.path.isfile(input_path):
-        # 单张图片 → 显示可视化
         if output_path is None:
-            output_path = None
+            out_file = None
         else:
             if os.path.isdir(output_path):
                 base = os.path.basename(input_path)
                 name, _ = os.path.splitext(base)
-                output_path = os.path.join(output_path, name + "_ours.png")
-        predict_image(input_path, output_path, show=True)
-        print(f"Processed {input_path} -> {output_path}")
+                out_file = os.path.join(output_path, name + "_ours.png")
+            else:
+                out_file = output_path
+        predict_image(input_path, out_file, show=True)
+        print(f"Processed {input_path} -> {out_file}")
 
     elif os.path.isdir(input_path):
-        # 批量处理 → 不显示可视化
         if output_path is None:
             output_path = input_path
         os.makedirs(output_path, exist_ok=True)
@@ -394,7 +361,6 @@ def main():
     else:
         print(f"Input path {input_path} does not exist.")
         return
-
 
 if __name__ == "__main__":
     main()
