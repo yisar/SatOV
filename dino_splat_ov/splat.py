@@ -13,6 +13,7 @@ import argparse
 import os
 import glob
 
+
 # =========================
 # 图拉普拉斯平滑（LPOSS）
 # =========================
@@ -22,24 +23,33 @@ def graph_laplacian_smooth(
     num_iter: int = 3,
     alpha: float = 0.6,
     temperature: float = 0.1,
-    kernel_size: int = 3
+    kernel_size: int = 3,
 ) -> torch.Tensor:
     C, H, W = logits.shape
     pad = kernel_size // 2
-    feat_pad = F.pad(features.unsqueeze(0), (pad, pad, pad, pad), mode="reflect").squeeze(0)
+    feat_pad = F.pad(
+        features.unsqueeze(0), (pad, pad, pad, pad), mode="reflect"
+    ).squeeze(0)
     feat_unfold = F.unfold(feat_pad.unsqueeze(0), kernel_size=kernel_size, padding=0)
-    feat_unfold = feat_unfold.reshape(features.shape[0], kernel_size * kernel_size, H, W)
+    feat_unfold = feat_unfold.reshape(
+        features.shape[0], kernel_size * kernel_size, H, W
+    )
     similarity = torch.einsum("dnhw,dhw->nhw", feat_unfold, features)
     affinity = torch.exp(similarity / temperature)
     affinity = affinity / affinity.sum(dim=0, keepdim=True)
     current_logits = logits.clone()
     for _ in range(num_iter):
-        current_pad = F.pad(current_logits.unsqueeze(0), (pad, pad, pad, pad), mode="reflect").squeeze(0)
-        current_unfold = F.unfold(current_pad.unsqueeze(0), kernel_size=kernel_size, padding=0)
+        current_pad = F.pad(
+            current_logits.unsqueeze(0), (pad, pad, pad, pad), mode="reflect"
+        ).squeeze(0)
+        current_unfold = F.unfold(
+            current_pad.unsqueeze(0), kernel_size=kernel_size, padding=0
+        )
         current_unfold = current_unfold.reshape(C, kernel_size * kernel_size, H, W)
         neighbor_avg = torch.einsum("cnhw,nhw->chw", current_unfold, affinity)
         current_logits = alpha * current_logits + (1 - alpha) * neighbor_avg
     return current_logits
+
 
 # =========================
 # 加载 DINOv3 模型（全局单例）
@@ -59,13 +69,25 @@ model = model.to(device).eval()
 # 类别分组（可自定义）
 # =========================
 class_groups = [
-    ["pavement","bareland", "barren"],
+    ["pavement", "bareland", "barren"],
     ["road"],
     ["forest", "tree"],
     ["river", "water"],
     ["grass"],
     ["field", "cropland"],
     ["building", "house", "roof"],
+]
+
+# 彩色掩膜
+preset_palette = [
+    # (72, 40, 120),
+    (62, 74, 137),
+    (49, 104, 142),
+    (38, 130, 142),
+    (31, 158, 137),
+    (73, 193, 110),
+    (160, 218, 57),
+    (253, 231, 37),
 ]
 
 flat_texts = []
@@ -85,6 +107,7 @@ num_classes = len(class_groups)
 win_size = 256
 stride = 128
 
+
 def pad_to_multiple(img, win_size, stride):
     h, w = img.shape[:2]
     pad_h = (win_size - h) % stride if h < win_size else (win_size - h) % stride
@@ -98,6 +121,7 @@ def pad_to_multiple(img, win_size, stride):
     )
     return img_padded, pad_top, pad_left
 
+
 def preprocess_patch(patch_np):
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -107,6 +131,7 @@ def preprocess_patch(patch_np):
     tensor = to_tensor(patch_pil)
     tensor = normalize(tensor)
     return tensor.unsqueeze(0).to(device)
+
 
 # =========================
 # 核心预测函数
@@ -180,16 +205,24 @@ def predict_image(image_path, output_path=None, show=False):
                 features=img_feat.squeeze(0),
                 num_iter=3,
                 alpha=0.6,
-                temperature=0.1
+                temperature=0.1,
             )
             logits = logits_smooth.unsqueeze(0)
 
             # JBU 上采样
             logits_lr = rearrange(logits[0], "c h w -> (h w) c").unsqueeze(0)
-            patch_coords_lr = create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
-            patch_coords_hr = create_coordinate_grid_2d(win_size, win_size, device).reshape(-1, 2).unsqueeze(0)
+            patch_coords_lr = (
+                create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
+            )
+            patch_coords_hr = (
+                create_coordinate_grid_2d(win_size, win_size, device)
+                .reshape(-1, 2)
+                .unsqueeze(0)
+            )
 
-            image_lr = F.interpolate(win_tensor, size=(h, w), mode="bilinear", align_corners=False)
+            image_lr = F.interpolate(
+                win_tensor, size=(h, w), mode="bilinear", align_corners=False
+            )
             pixels_lr = rearrange(image_lr, "b c h w -> b (h w) c")
             pixels_hr = rearrange(win_tensor, "b c h w -> b (h w) c")
 
@@ -200,9 +233,15 @@ def predict_image(image_path, output_path=None, show=False):
                 pixels_hr=pixels_hr,
             ).to(device)
             up_logits = upsampler.forward(logits_lr)
-            up_logits = up_logits.reshape(1, win_size, win_size, num_classes).permute(0, 3, 1, 2).squeeze(0)
+            up_logits = (
+                up_logits.reshape(1, win_size, win_size, num_classes)
+                .permute(0, 3, 1, 2)
+                .squeeze(0)
+            )
 
-            raw_weight_hr = F.interpolate(raw_weight.unsqueeze(0), size=(win_size, win_size), mode='bilinear').squeeze(0)
+            raw_weight_hr = F.interpolate(
+                raw_weight.unsqueeze(0), size=(win_size, win_size), mode="bilinear"
+            ).squeeze(0)
             raw_weight_hr = raw_weight_hr.squeeze(0)
 
             all_up_logits.append(up_logits.cpu())
@@ -211,8 +250,12 @@ def predict_image(image_path, output_path=None, show=False):
 
     # 跨窗口融合
     device_cpu = torch.device("cpu")
-    acc_weighted_logits = torch.zeros((num_classes, H_img, W_img), dtype=torch.float32, device=device_cpu)
-    acc_exp_weights = torch.zeros((H_img, W_img), dtype=torch.float32, device=device_cpu)
+    acc_weighted_logits = torch.zeros(
+        (num_classes, H_img, W_img), dtype=torch.float32, device=device_cpu
+    )
+    acc_exp_weights = torch.zeros(
+        (H_img, W_img), dtype=torch.float32, device=device_cpu
+    )
 
     temperature = 0.07
     hann_1d = torch.hann_window(win_size, device=device_cpu)
@@ -237,7 +280,9 @@ def predict_image(image_path, output_path=None, show=False):
         logits_crop = up_logits[:, crop_y1:crop_y2, crop_x1:crop_x2]
         exp_w_crop = exp_w[crop_y1:crop_y2, crop_x1:crop_x2]
 
-        acc_weighted_logits[:, y_start:y_end, x_start:x_end] += logits_crop * exp_w_crop.unsqueeze(0)
+        acc_weighted_logits[:, y_start:y_end, x_start:x_end] += (
+            logits_crop * exp_w_crop.unsqueeze(0)
+        )
         acc_exp_weights[y_start:y_end, x_start:x_end] += exp_w_crop
 
     final_logits = acc_weighted_logits / (acc_exp_weights.clamp(min=1e-6))
@@ -251,18 +296,14 @@ def predict_image(image_path, output_path=None, show=False):
         base, ext = os.path.splitext(image_path)
         output_path = base + "_ours.png"
 
-    # 彩色掩膜
-    preset_palette = [
-        # (72, 40, 120),
-          (62, 74, 137), (49, 104, 142), (38, 130, 142),
-        (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37),
-    ]
-    preset_palette = np.array(preset_palette)
-    if num_classes <= len(preset_palette):
-        palette = preset_palette[:num_classes]
+    preset_palette2 = np.array(preset_palette)
+    if num_classes <= len(preset_palette2):
+        palette = preset_palette2[:num_classes]
     else:
         cmap = plt.cm.get_cmap("tab20", num_classes)
-        palette = np.array([np.array(cmap(i)[:3]) * 255 for i in range(num_classes)], dtype=np.uint8)
+        palette = np.array(
+            [np.array(cmap(i)[:3]) * 255 for i in range(num_classes)], dtype=np.uint8
+        )
 
     mask_color = np.zeros((H_img, W_img, 3), dtype=np.uint8)
     for class_id in range(num_classes):
@@ -284,7 +325,7 @@ def predict_image(image_path, output_path=None, show=False):
         plt.subplot(1, 2, 2)
         # 使用调色板显示
         cmap_display = ListedColormap(np.array(palette) / 255.0)
-        plt.imshow(mask, cmap=cmap_display, vmin=0, vmax=num_classes-1)
+        plt.imshow(mask, cmap=cmap_display, vmin=0, vmax=num_classes - 1)
         plt.title("Segmentation Mask")
         plt.axis("off")
         plt.tight_layout()
@@ -292,13 +333,25 @@ def predict_image(image_path, output_path=None, show=False):
 
     return mask
 
+
 # =========================
 # 命令行入口
 # =========================
 def main():
-    parser = argparse.ArgumentParser(description="DINOv3-based semantic segmentation with text prior.")
-    parser.add_argument("--input", "-i", required=True, help="Path to an image file or a directory containing images.")
-    parser.add_argument("--output", "-o", help="Output path (file or directory). If not specified, auto-generate.")
+    parser = argparse.ArgumentParser(
+        description="DINOv3-based semantic segmentation with text prior."
+    )
+    parser.add_argument(
+        "--input",
+        "-i",
+        required=True,
+        help="Path to an image file or a directory containing images.",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Output path (file or directory). If not specified, auto-generate.",
+    )
     args = parser.parse_args()
 
     input_path = args.input
@@ -322,7 +375,7 @@ def main():
             output_path = input_path
         os.makedirs(output_path, exist_ok=True)
 
-        extensions = ('*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff')
+        extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
         image_files = []
         for ext in extensions:
             image_files.extend(glob.glob(os.path.join(input_path, ext)))
@@ -341,6 +394,7 @@ def main():
     else:
         print(f"Input path {input_path} does not exist.")
         return
+
 
 if __name__ == "__main__":
     main()
