@@ -2,7 +2,9 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+# =========================
+# TLP 类 (Text-aware Laplacian Smoothing)
+# =========================
 class TLP(nn.Module):
     def __init__(self, grid: int = 80, eps: float = 1e-6):
         super().__init__()
