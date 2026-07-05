@@ -26,15 +26,17 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
 
 # =========================
-# 类别分组（可自定义）
+# 滑动窗口参数
 # =========================
+win_size = 256
+stride = 128
 class_groups = [
-    ["pavement","sidewalk"],
-    ["bareland", "barren"],
-    ["road"],
-    ["forest", "tree"],
-    ["river", "water"],
-    ["grass"],
+    ["car"],
+    ["bus"],
+    ["road","pavement","sidewalk"],
+    ["forest","vegetation", "tree"],
+    ["river", "water","pool"],
+    ["grass","bareland", "barren"],
     ["field", "cropland"],
     ["building", "house", "roof"],
 ]
@@ -81,12 +83,6 @@ group_text_feats = torch.cat(group_text_feats, dim=0)  # [num_classes, D]
 # 初始化 TLP 并绑定文本特征
 tlp = TLP(grid=80).to(device)
 tlp.bind_text(group_text_feats)
-
-# =========================
-# 滑动窗口参数
-# =========================
-win_size = 256
-stride = 128
 
 
 def pad_to_multiple(img, win_size, stride):
