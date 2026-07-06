@@ -31,9 +31,9 @@ model = model.to(device).eval()
 win_size = 256
 stride = 128
 class_groups = [
-    ["car"],
-    ["bus"],
-    ["road","pavement","sidewalk"],
+    # ["car"],
+    # ["bus"],
+    ["road","sidewalk"],
     ["forest","vegetation", "tree"],
     ["river", "water","pool"],
     ["grass","bareland", "barren"],
@@ -43,8 +43,8 @@ class_groups = [
 
 # 彩色掩膜
 preset_palette = [
-    (72, 40, 120),
-    (62, 74, 137),
+    # (72, 40, 120),
+    # (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
     (31, 158, 137),
@@ -81,7 +81,7 @@ for idx_list in group_index_maps:
 group_text_feats = torch.cat(group_text_feats, dim=0)  # [num_classes, D]
 
 # 初始化 TLP 并绑定文本特征
-tlp = TLP(grid=80).to(device)
+tlp = TLP(grid=40).to(device)
 tlp.bind_text(group_text_feats)
 
 
