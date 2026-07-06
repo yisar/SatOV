@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 from pathlib import Path
 import sys
 import torch
@@ -81,7 +84,7 @@ for idx_list in group_index_maps:
 group_text_feats = torch.cat(group_text_feats, dim=0)  # [num_classes, D]
 
 # 初始化 TLP 并绑定文本特征
-tlp = TLP(grid=50).to(device)
+tlp = TLP(grid=40).to(device)
 tlp.bind_text(group_text_feats)
 
 
@@ -119,7 +122,7 @@ def predict_image(image_path, output_path=None, show=False):
     Args:
         image_path: 输入图像路径
         output_path: 输出路径（若为None则自动生成）
-        show: 是否显示可视化窗口
+        show: 是否显示可视化窗口（叠加半透明掩膜）
     Returns:
         mask: 预测标签图 (H, W) numpy数组
     """
@@ -173,28 +176,9 @@ def predict_image(image_path, output_path=None, show=False):
                 merged_logits.append(group_logit.unsqueeze(1))
             logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
 
-            # ---- 使用 TLP 平滑（替换原有的 graph_laplacian_smooth） ----
-            # 准备原始图像 patch，范围 [0,1]，形状 [1,3,win_size,win_size]
-            img_patch = (
-                torch.from_numpy(win_np)
-                .float()
-                .permute(2, 0, 1)
-                .unsqueeze(0)
-                .to(device)
-                / 255.0
-            )
-            # 重要：将图像下采样到与 logits 相同的空间尺寸 (h, w)
-            img_patch_lr = F.interpolate(
-                img_patch, size=(h, w), mode="bilinear", align_corners=False
-            )
-            # 应用 TLP（已经绑定文本特征）
-            logits_smooth = tlp(
-                image=img_patch_lr, logits=logits
-            )  # [1, num_classes, h, w]
-            # -------------------------------------------------------------
-
-            # JBU 上采样
-            logits_lr = rearrange(logits_smooth[0], "c h w -> (h w) c").unsqueeze(0)
+            # ====================== 核心修改：调换顺序 先高斯上采样，再高分辨率TLP ======================
+            # 1. JBU 高斯上采样放到前面，先把低分辨率logits升到256×256 patch尺寸
+            logits_lr = rearrange(logits[0], "c h w -> (h w) c").unsqueeze(0)
             patch_coords_lr = (
                 create_coordinate_grid_2d(h, w, device).reshape(-1, 2).unsqueeze(0)
             )
@@ -216,14 +200,25 @@ def predict_image(image_path, output_path=None, show=False):
                 pixels_lr=pixels_lr,
                 pixels_hr=pixels_hr,
             ).to(device)
-            up_logits = upsampler.forward(logits_lr)
-            up_logits = (
-                up_logits.reshape(1, win_size, win_size, num_classes)
-                .permute(0, 3, 1, 2)
-                .squeeze(0)
-            )
+            # 高斯上采样得到高分辨率logits [1, win_size*win_size, num_classes]
+            up_logits_hr_flat = upsampler.forward(logits_lr)
+            up_logits_hr = up_logits_hr_flat.reshape(1, win_size, win_size, num_classes).permute(0, 3, 1, 2)
 
-            # 置信度权重
+            # 2. 使用原始256分辨率RGB送入TLP做平滑（不再下采样到lr尺寸）
+            img_patch_hr = (
+                torch.from_numpy(win_np)
+                .float()
+                .permute(2, 0, 1)
+                .unsqueeze(0)
+                .to(device)
+                / 255.0
+            )
+            up_logits_hr = F.interpolate(logits, size=(win_size, win_size), mode='bilinear', align_corners=False)
+            logits_smooth = tlp(image=img_patch_hr, logits=up_logits_hr)  # [1, num_classes, win_size, win_size]
+            up_logits = up_logits_hr.squeeze(0)
+            # =========================================================================================
+
+            # 置信度权重（不变，仍用低分辨率原始相似度最大值）
             raw_weight = logits_flat.max(dim=1)[0]  # [1, h, w]
             raw_weight_hr = F.interpolate(
                 raw_weight.unsqueeze(0), size=(win_size, win_size), mode="bilinear"
@@ -234,7 +229,7 @@ def predict_image(image_path, output_path=None, show=False):
             all_up_weights.append(raw_weight_hr.cpu())
             all_positions.append((y0, x0))
 
-    # 跨窗口融合
+    # 跨窗口融合（完全不变）
     device_cpu = torch.device("cpu")
     acc_weighted_logits = torch.zeros(
         (num_classes, H_img, W_img), dtype=torch.float32, device=device_cpu
@@ -277,7 +272,7 @@ def predict_image(image_path, output_path=None, show=False):
     mask = np.argmax(final_probs_np, axis=0)
     mask = median_filter(mask, size=3)
 
-    # ---------- 保存结果 ----------
+    # ---------- 保存结果（纯色掩膜） ----------
     if output_path is None:
         base, ext = os.path.splitext(image_path)
         output_path = base + "_ours.png"
@@ -297,18 +292,14 @@ def predict_image(image_path, output_path=None, show=False):
 
     Image.fromarray(mask_color).save(output_path)
 
-    # ---------- 可视化 ----------
+    # ---------- 可视化（原图叠加半透明掩膜） ----------
     if show:
-        plt.figure(figsize=(10, 5))
-        plt.subplot(1, 2, 1)
-        plt.imshow(image)
-        plt.title("Input")
-        plt.axis("off")
-
-        plt.subplot(1, 2, 2)
-        cmap_display = ListedColormap(np.array(palette) / 255.0)
-        plt.imshow(mask, cmap=cmap_display, vmin=0, vmax=num_classes - 1)
-        plt.title("Segmentation Mask")
+        plt.figure(figsize=(10, 10))
+        # 先显示原图
+        # plt.imshow(image)
+        # 叠加半透明彩色掩膜（alpha 控制透明度，可自行调整）
+        plt.imshow(mask_color)
+        plt.title("Segmentation Overlay (Transparent Mask)")
         plt.axis("off")
         plt.tight_layout()
         plt.show()
@@ -321,7 +312,7 @@ def predict_image(image_path, output_path=None, show=False):
 # =========================
 def main():
     parser = argparse.ArgumentParser(
-        description="DINOv3-based semantic segmentation with text prior and TLP smoothing."
+        description="DINOv3-based semantic segmentation with text prior and TLP smoothing. Modified order: Gaussian upsample first then high-res TLP."
     )
     parser.add_argument(
         "--input",
