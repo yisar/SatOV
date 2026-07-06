@@ -2,67 +2,49 @@
     * {
         padding: 0;
         margin: 0;
+        box-sizing: border-box;
+    }
+
+    .grid-wrap {
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 1fr 1fr; 
+        gap: 8px;
     }
 
     ul {
         list-style: none;
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        /* border-radius: 5px; */
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
         padding: 0 10px;
-        box-sizing: border-box;
-        position: relative;
 
     }
 
     ul li {
-        flex: 1;
-        /* background: #eee; */
-        padding: 5px;
-        text-align: center;
+        padding: 0 5px;
+
+        display: flex;
         justify-content: center;
         align-items: center;
-        /* margin: 5px; */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
 
     ul li img {
         width: 100%;
-
+        height: 100%;
     }
 
     p {
-        writing-mode: vertical-rl;
-        text-orientation: upright;
         font-size: 14px;
     }
 </style>
+
 <ul>
-    <p>&nbsp;&nbsp;&nbsp;</p>
-    <li>Origin</li>
-    <li>clearCLIP</li>
-    <li>SegEarth-OV</li>
-    <li>DinoSplat-OV(ours)</li>
-</ul>
-<ul>
-    <p>DDOA</p>
-    <li><img src="./img.jpg" alt=""></li>
-    <li><img src="./img_ours.png" alt=""></li>
-    <li><img src="./seg_img.png" alt=""></li>
-    <li><img src="./img_dino.png" alt=""></li>
-</ul>
-<ul>
-    <p>LoveDA</p>
-    <li><img src="./_3558.png" alt=""></li>
-    <li><img src="./_3558_ours.png" alt=""></li>
-    <li><img src="./seg_3558.png" alt=""></li>
-    <li><img src="./_3558_dino.png" alt=""></li>
-</ul>
-<ul>
-    <p>UDD5</p>
-    <li><img src="./P0492.png" alt=""></li>
-    <li><img src="./P0492_ours.png" alt=""></li>
-    <li><img src="./seg_P0492.png" alt=""></li>
-    <li><img src="./P0492_dino.png" alt=""></li>
+    <li><p>Origin</p><img src="./P0492.png" alt=""></li>
+    <li><p>DINO.txt</p><img src="./dino_txt.png" alt=""></li>
+    <li><p>with TLP</p><img src="./w_lap.png" alt=""></li>
+    <li><p>with GSUP</p><img src="./w_gsup.png" alt=""></li>
 </ul>

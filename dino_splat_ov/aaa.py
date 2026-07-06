@@ -33,20 +33,41 @@ model = model.to(device).eval()
 # =========================
 win_size = 256
 stride = 128
+# class_groups = [
+#     # ["car"],
+#     ["sidewalk"],
+#     ["road"],
+#     ["vegetation", "tree"],
+#     ["river", "water", "pool"],
+#     ["grass", "bareland", "barren", "pavement"],
+#     ["field", "cropland"],
+#     ["building", "roof"],
+# ]
+
+# # 彩色掩膜
+# preset_palette = [
+#     # (72, 40, 120),
+#     (62, 74, 137),
+#     (49, 104, 142),
+#     (38, 130, 142),
+#     (31, 158, 137),
+#     (73, 193, 110),
+#     (160, 218, 57),
+#     (253, 231, 37),
+# ]
+
 class_groups = [
-    # ["car"],
-    ["sidewalk"],
+    ["pavement", "bareland", "barren"],
     ["road"],
-    ["vegetation", "tree"],
-    ["river", "water", "pool"],
-    ["grass", "bareland", "barren", "pavement"],
+    ["forest", "tree"],
+    ["river", "water"],
+    ["grass"],
     ["field", "cropland"],
-    ["building", "roof"],
+    ["building", "house", "roof"],
 ]
 
 # 彩色掩膜
 preset_palette = [
-    # (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
