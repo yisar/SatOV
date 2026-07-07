@@ -1,0 +1,54 @@
+<style>
+    * {
+        padding: 0;
+        margin: 0;
+        box-sizing: border-box;
+    }
+
+    .grid-wrap {
+        margin: 0 auto;
+        display: block;
+    }
+
+    ul {
+        list-style: none;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        padding: 0 10px;
+        display: flex;
+
+    }
+
+    ul li {
+        padding: 0 5px;
+
+        display: flex;
+        /* justify-content: center; */
+        align-items: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+
+    ul li img {
+        width: 100%;
+        height: 100%;
+    }
+
+    p {
+        font-size: 16px;
+        padding: 5px;
+        display: block;
+        width: 100%;
+    }
+</style>
+
+<ul>
+    <li>
+        <p>Cost Aggregation</p><img src="./CA.png" alt="">
+    </li>
+    <div style="width: 40px;"></div>
+    <li>
+        <p>Text-Aware Laplacian Propagation</p><img src="./TTL.png" alt="">
+    </li>
+</ul>

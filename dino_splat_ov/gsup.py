@@ -68,18 +68,6 @@ class GaussianFeatureUpsampler(nn.Module):
         max_radius: int = 6,
         eps: float = 1e-6,
     ):
-        """
-        patch_coords_lr: low resolution patch coordinates
-            shape: (B, L, ND)
-        patch_coords_hr: high resolution patch coordinates
-            shape: (B, H, ND)
-        pixels_lr: low resolution guidance pixels
-            shape: (B, L, D)
-        pixels_hr: high resolution guidance pixels
-            shape: (B, H, D)
-        Note:
-            For 2D images with RGB pixels ND=2 and D=3
-        """
         super().__init__()
 
         self.register_buffer("patch_coords_lr", patch_coords_lr)
@@ -108,9 +96,6 @@ class GaussianFeatureUpsampler(nn.Module):
         # High resolution pixels only interact with the k nearest splats
         k = self.max_radius**self.ND
 
-        # Get idx that indicates the k nearest splats that each
-        # high resolution pixel can interact with
-
         # B H L -> B H K
         _, neighbor_idx = (-spatial_distances).topk(k, dim=2, sorted=False)
 
@@ -121,9 +106,6 @@ class GaussianFeatureUpsampler(nn.Module):
 
         self.register_buffer("neighbor_idx", neighbor_idx)
         self.register_buffer("neighbor_diffs", neighbor_diffs)
-
-        # Initialize Parameters per splat (LR pixel)
-        # We use inverse parameterization or log space to ensure positivity where needed
 
         self.log_sigma = nn.Parameter(
             torch.ones(self.batch_size, self.num_splats, self.ND) * math.log(init_sigma)
