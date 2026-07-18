@@ -19,6 +19,7 @@ dependencies = [
     "omegaconf>=2.3.1",
     "tensorboard>=2.20.0",
     "pydensecrf2>=1.1",
+    "uplift[vit]",
 ]
 
 [[tool.uv.index]]
@@ -31,3 +32,4 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "aliyun-pytorch" }
+uplift = { git = "https://github.com/mwalmer-umd/UPLiFT.git" }

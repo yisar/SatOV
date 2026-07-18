@@ -1151,6 +1151,7 @@ dependencies = [
     { name = "torchvision" },
     { name = "transformers" },
     { name = "ultralytics" },
+    { name = "uplift", extra = ["vit"] },
 ]
 
 [package.metadata]
@@ -1169,6 +1170,7 @@ requires-dist = [
     { name = "torchvision", specifier = "==0.19.1" },
     { name = "transformers", specifier = "==4.35.2" },
     { name = "ultralytics", specifier = ">=8.4.62" },
+    { name = "uplift", extras = ["vit"], git = "https://github.com/mwalmer-umd/UPLiFT.git" },
 ]
 
 [[package]]
@@ -1552,6 +1554,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/98/c6/d25cb53e141242f74950744179c21b8798bb09b9e7161465ecda4f577ddf/ultralytics_thop-2.0.20.tar.gz", hash = "sha256:f3595e0d8c6fd0b9f62fc2cd9be921755e2649a05c34f1fabaea0bff7295d641", size = 34682, upload-time = "2026-06-06T11:42:42.184Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/a9/5441a28af447c0ffe193f1f42dfebe2a518ab3e160e9e0d164e8901edead/ultralytics_thop-2.0.20-py3-none-any.whl", hash = "sha256:ef1b326404aeb10954f50db58982ec8dcab5946ee04a9b10e1107ec7ba4d5c22", size = 28954, upload-time = "2026-06-06T11:42:40.796Z" },
+]
+
+[[package]]
+name = "uplift"
+version = "0.1.0"
+source = { git = "https://github.com/mwalmer-umd/UPLiFT.git#2cde1ad8b7dc98fd46a3d3ffa6de3de9f99ae70f" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "omegaconf" },
+    { name = "pillow" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+
+[package.optional-dependencies]
+vit = [
+    { name = "timm" },
 ]
 
 [[package]]
