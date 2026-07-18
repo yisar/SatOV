@@ -390,7 +390,6 @@ class GaussianUpsamplerWrapper(nn.Module):
         pixels_lr = rearrange(guide_lr, "b c h w -> b (h w) c")
 
         # 2. 强行开启梯度上下文，确保 fit 内部的 loss.backward() 正常工作
-        # 哪怕外层套了 @torch.no_grad()，这里也能独立计算梯度
         with torch.enable_grad():
             upsampler = GaussianFeatureUpsampler(
                 patch_coords_lr=patch_coords_lr,

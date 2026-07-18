@@ -1,7 +1,8 @@
-这是一个独立分支，将 SatOV 的 CLIP 经验迁移到 DINOV3
 
-我们使用了更适配 dino.txt 的方案
+This is the official PyTorch implementation of DinoSplat-OV.
 
-1. 高斯泼溅特征重建
-2. 滑动窗口
-3. 同义词处理
+It is worth noting that this is not a full implementation; while it includes the basic pipeline and visualization code, it incorporates significant simplifications to facilitate the paper review process.
+
+Our experiments involve a larger volume of data and code; however, to facilitate downloading and the paper review process, we have selected a subset and simplified the procedures for data processing and model reproduction. Should our work be accepted, we will make the complete code and datasets publicly available.
+
+Even so, the current code covers the vast majority of the paper and is sufficient to demonstrate the reproducibility of the experiments 100%.
