@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 # =========================
-# TLP 类 (Text-aware Laplacian Smoothing)
+# TLP 类 (Text-aware Laplacian )
 # =========================
 class TLP(nn.Module):
     def __init__(self, grid: int = 80, eps: float = 1e-6):
