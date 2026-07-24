@@ -21,6 +21,7 @@ class TLP(nn.Module):
         T = F.normalize(text_features, dim=-1)               # [C,D]
         S = T @ T.t()                                        # [C,C] cosine
         S = torch.softmax(S / max(self._tau_S, self.eps), dim=1)
+        S = (S + S.t()) / 2.0
         if self._diag_boost > 0:
             C = S.size(0)
             S = S + self._diag_boost * torch.eye(C, device=S.device, dtype=S.dtype)
