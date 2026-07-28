@@ -15,7 +15,7 @@ import glob
 
 root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
-from dino_splat_ov.prop import TLP
+from dino_splat_ov.tlp import TLP
 from dino_splat_ov.dinov3.hub.dinotxt import dinov3_vitl16_dinotxt_tet1280d20h24l
 from dino_splat_ov.gsup import GaussianFeatureUpsampler, create_coordinate_grid_2d
 
@@ -24,43 +24,22 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
 
 
-win_size = 256
-stride = 128
-# class_groups = [
-#     ["car"],
-#     ["bus"],
-#     ["road","pavement","sidewalk"],
-#     ["forest","vegetation", "tree"],
-#     ["river", "water","pool"],
-#     ["grass","bareland", "barren"],
-#     ["field", "cropland"],
-#     ["building", "house", "roof"],
-# ]
-
-# # 彩色掩膜
-# preset_palette = [
-#     (72, 40, 120),
-#     (62, 74, 137),
-#     (49, 104, 142),
-#     (38, 130, 142),
-#     (31, 158, 137),
-#     (73, 193, 110),
-#     (160, 218, 57),
-#     (253, 231, 37),
-# ]
-
+win_size = 144
+stride = 72
 class_groups = [
-    ["pavement", "bareland", "barren"],
-    ["road"],
-    ["forest", "tree"],
-    ["river", "water"],
+    ["bus,car"],
+    ["road", "pavement"],
+    ["bareland", "barren"],
+    ["river", "water", "pool"],
     ["grass"],
+    ["forest", "vegetation", "tree"],
     ["field", "cropland"],
-    ["building", "house", "roof"],
+    ["building","roof"],
 ]
 
-# 彩色掩膜
+# # 彩色掩膜
 preset_palette = [
+    (72, 40, 120),
     (62, 74, 137),
     (49, 104, 142),
     (38, 130, 142),
@@ -69,6 +48,27 @@ preset_palette = [
     (160, 218, 57),
     (253, 231, 37),
 ]
+
+# class_groups = [
+#     ["pavement", "bareland", "barren"],
+#     ["road"],
+#     ["forest", "tree"],
+#     ["river", "water"],
+#     ["grass"],
+#     ["field", "cropland"],
+#     ["building", "house", "roof"],
+# ]
+
+# 彩色掩膜
+# preset_palette = [
+#     (62, 74, 137),
+#     (49, 104, 142),
+#     (38, 130, 142),
+#     (31, 158, 137),
+#     (73, 193, 110),
+#     (160, 218, 57),
+#     (253, 231, 37),
+# ]
 
 flat_texts = []
 group_index_maps = []
@@ -120,7 +120,6 @@ def preprocess_patch(patch_np):
     tensor = to_tensor(patch_pil)
     tensor = normalize(tensor)
     return tensor.unsqueeze(0).to(device)
-
 
 
 def predict_image(image_path, output_path=None, show=False):
@@ -352,7 +351,7 @@ def main():
             output_path = input_path
         os.makedirs(output_path, exist_ok=True)
 
-        extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
+        extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff","*.tif")
         image_files = []
         for ext in extensions:
             image_files.extend(glob.glob(os.path.join(input_path, ext)))
