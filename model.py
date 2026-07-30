@@ -22,11 +22,15 @@ class DenseClip(nn.Module):
         jit: bool = False,
         only_clear: bool = False,
         upsampler: str = "gfup",
+        use_nap: bool = True,            # <-- 新增：是否启用 NAP 空间偏置
+        pos_bias_scale: float = 0.1,     # <-- 新增：空间偏置的缩放系数
     ):
         super().__init__()
         self.device = torch.device(device)
         self.model_name = name
         self.only_clear = only_clear
+        self.use_nap = use_nap            # 保存参数
+        self.pos_bias_scale = pos_bias_scale
 
         # 1. 加载 OpenCLIP 模型
         pretrained_tag = "openai" if "laion" not in name else "laion2b_s34b_b88k"
@@ -62,7 +66,6 @@ class DenseClip(nn.Module):
         elif upsampler == "gsu":
             self.up = GaussianUpsamplerWrapper()
 
-
         # 4. 视觉投影层 (1x1 conv)
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
         if hasattr(self.visual, "proj") and self.visual.proj is not None:
@@ -80,6 +83,45 @@ class DenseClip(nn.Module):
 
         # 6. 初始化零样本分类器
         self._init_zeroshot_classifier()
+
+        # 7. 新增：位置偏置缓存（用于 NAP）   <-- 新增
+        self._pos_bias_cache = {}
+
+    # ------------- 新增 NAP 辅助方法 -------------
+    @staticmethod
+    def create_spatial_kernel(height, width, std=1.0, kernel_type='gaussian'):
+        """生成空间核矩阵（高斯或拉普拉斯）"""
+        center_h, center_w = (height - 1) / 2.0, (width - 1) / 2.0
+        y_coords = torch.arange(height, dtype=torch.float) - center_h
+        x_coords = torch.arange(width, dtype=torch.float) - center_w
+        y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        if kernel_type == 'gaussian':
+            dist_sq = (x_grid**2 + y_grid**2) / (2 * std**2)
+            return torch.exp(-dist_sq)
+        elif kernel_type == 'laplacian':
+            dist_l1 = torch.abs(x_grid) + torch.abs(y_grid)
+            return torch.exp(-dist_l1 / std)
+        else:
+            raise ValueError(f"不支持的核类型: {kernel_type}")
+
+    @staticmethod
+    def build_positional_attention_bias(patch_h, patch_w, spatial_kernel, adjust_for_cls=True):
+        """利用空间核构建位置注意力偏置矩阵"""
+        total_patches = patch_h * patch_w
+        identity = torch.eye(total_patches).view(total_patches, patch_h, patch_w)
+        convolved = F.conv2d(
+            identity.unsqueeze(1),
+            spatial_kernel.unsqueeze(0).unsqueeze(1),
+            padding='same'
+        ).squeeze(1)
+        attn_bias = convolved.view(total_patches, total_patches)
+        if adjust_for_cls:
+            full_bias = torch.zeros((total_patches + 1, total_patches + 1))
+            full_bias[1:, 1:] = attn_bias
+            return full_bias
+        return attn_bias
+    # ---------------------------------------------
+
     def extract_patch_features(self, images: torch.Tensor):
         """
         只提取 ClearCLIP 去偏后的 Patch 级特征，不做任何上采样和投影。
@@ -88,7 +130,6 @@ class DenseClip(nn.Module):
         images = images.to(self.device)
         lr_features = self._extract_clearclip_features(images)  # [B, C, grid_h, grid_w]
         return lr_features
-        
 
     @torch.no_grad()
     def _init_zeroshot_classifier(self):
@@ -111,6 +152,7 @@ class DenseClip(nn.Module):
     def _extract_clearclip_features(self, img: torch.Tensor):
         """
         从输入图像提取 ClearCLIP 去偏特征 (patch - cls)
+        如果 use_nap=True，在 QQ 注意力基础上叠加空间偏置。
         返回: [B, feat_dim, grid_h, grid_w]
         """
         B, C, H, W = img.shape
@@ -146,7 +188,7 @@ class DenseClip(nn.Module):
         for i in range(len(blocks) - 1):
             x_tokens = blocks[i](x_tokens)
 
-        # 3. 最后一层 Self-Self Attention (ClearCLIP)
+        # 3. 最后一层 Self-Self Attention (ClearCLIP + NAP)
         last_block = blocks[-1]
         x_norm = last_block.ln_1(x_tokens)
         attn = last_block.attn
@@ -157,10 +199,31 @@ class DenseClip(nn.Module):
         num_heads = attn.num_heads
         head_dim = D // num_heads
 
-        q = q.view(B, N, num_heads, head_dim).transpose(1, 2)
+        q = q.view(B, N, num_heads, head_dim).transpose(1, 2)  # [B, heads, N, hd]
         v = v.view(B, N, num_heads, head_dim).transpose(1, 2)
 
-        attn_matrix = (q @ q.transpose(-2, -1)) * (head_dim ** -0.5)
+        # ---- 计算 QQ 注意力分数 ----
+        attn_matrix = (q @ q.transpose(-2, -1)) * (head_dim ** -0.5)  # [B, heads, N, N]
+
+        # ---- 【NAP 核心】叠加空间偏置 ----
+        if self.use_nap:
+            # ① 获取/生成空间偏置矩阵
+            cache_key = (grid_h, grid_w)
+            if cache_key not in self._pos_bias_cache:
+                window_h, window_w = grid_h * 2 - 1, grid_w * 2 - 1
+                # 混合高斯+拉普拉斯（权重可调，此处固定 0.7/0.3）
+                gauss_k = self.create_spatial_kernel(window_h, window_w, std=1.0, kernel_type='gaussian')
+                lapl_k = self.create_spatial_kernel(window_h, window_w, std=1.0, kernel_type='laplacian')
+                mixed_kernel = 0.7 * gauss_k + 0.3 * lapl_k
+                pos_bias = self.build_positional_attention_bias(grid_h, grid_w, mixed_kernel, adjust_for_cls=True)
+                # 缓存到 CPU，节省显存（使用时再转至当前设备）
+                self._pos_bias_cache[cache_key] = pos_bias.cpu()
+            pos_bias = self._pos_bias_cache[cache_key].to(device=attn_matrix.device, dtype=attn_matrix.dtype)
+
+            # ② 偏置加到注意力分数上（缩放系数可调）
+            attn_matrix = attn_matrix + self.pos_bias_scale * pos_bias  # 广播到 [B, heads, N, N]
+
+        # ---- Softmax 与加权 ----
         attn_matrix = attn_matrix.softmax(dim=-1)
         attn_out = (attn_matrix @ v).transpose(1, 2).reshape(B, N, -1)
 

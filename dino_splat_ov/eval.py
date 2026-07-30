@@ -131,7 +131,6 @@ def evaluate_single_image(pred_mask, gt_mask):
         macc = compute_hungarian_macc(pred_mask, gt_mask)
         pixel_acc = compute_pixel_acc(pred_mask, gt_mask)
     else:
-        # 模式A：监督分割一一对应（本次不用）
         raise NotImplementedError("当前仅启用模式B匈牙利匹配")
     return {
         "mIoU": miou,

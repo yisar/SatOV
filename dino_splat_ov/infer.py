@@ -173,8 +173,7 @@ def predict_image(image_path, output_path=None, show=False):
                 merged_logits.append(group_logit.unsqueeze(1))
             logits = torch.cat(merged_logits, dim=1)  # [1, num_classes, h, w]
 
-            # ---- 使用 TLP 平滑（替换原有的 graph_laplacian_smooth） ----
-            # 准备原始图像 patch，范围 [0,1]，形状 [1,3,win_size,win_size]
+
             img_patch = (
                 torch.from_numpy(win_np)
                 .float()
