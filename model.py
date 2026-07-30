@@ -10,7 +10,6 @@ from satup.model import SatUp
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-
 class DenseClip(nn.Module):
     def __init__(
         self,
@@ -21,11 +20,18 @@ class DenseClip(nn.Module):
         jit: bool = False,
         only_clear: bool = False,
         upsampler: str = "gfup",
+        # ResCLIP 相关参数
+        use_resclip: bool = True,
+        resclip_alpha: float = 0.5,  # 残差融合权重
+        resclip_layer: int = -2,     # 提取中间层 (-2 表示倒数第二层)
     ):
         super().__init__()
         self.device = torch.device(device)
         self.model_name = name
         self.only_clear = only_clear
+        self.use_resclip = use_resclip
+        self.resclip_alpha = resclip_alpha
+        self.resclip_layer = resclip_layer
 
         # 1. 加载 OpenCLIP 模型
         pretrained_tag = "openai" if "laion" not in name else "laion2b_s34b_b88k"
@@ -53,14 +59,12 @@ class DenseClip(nn.Module):
                 .eval()
             )
         elif upsampler == "satup":
-            # 直接使用 SatUp，不再通过 Wrapper，确保与 infer.py 调用方式一致
             self.up = SatUp(dim=128, v_dim=768).to(self.device)
             ckpt = torch.load("satup.pth", map_location=self.device)
             self.up.load_state_dict(ckpt, strict=True)
             self.up.eval()
         elif upsampler == "gsu":
             self.up = GaussianUpsamplerWrapper()
-
 
         # 4. 视觉投影层 (1x1 conv)
         self.v_proj = nn.Conv2d(self.feat_dim, self.embed_dim, 1).to(self.device)
@@ -79,15 +83,15 @@ class DenseClip(nn.Module):
 
         # 6. 初始化零样本分类器
         self._init_zeroshot_classifier()
+
     def extract_patch_features(self, images: torch.Tensor):
         """
         只提取 ClearCLIP 去偏后的 Patch 级特征，不做任何上采样和投影。
-        返回: [B, C, grid_h, grid_w]  例如 [B, 768, 14, 14]
+        返回: [B, C, grid_h, grid_w]
         """
         images = images.to(self.device)
-        lr_features = self._extract_clearclip_features(images)  # [B, C, grid_h, grid_w]
+        lr_features = self._extract_clearclip_features(images)
         return lr_features
-        
 
     @torch.no_grad()
     def _init_zeroshot_classifier(self):
@@ -109,7 +113,7 @@ class DenseClip(nn.Module):
 
     def _extract_clearclip_features(self, img: torch.Tensor):
         """
-        从输入图像提取 ClearCLIP 去偏特征 (patch - cls)
+        从输入图像提取特征。如果启用 ResCLIP，则在最后一层融合中间层的互相关注意力。
         返回: [B, feat_dim, grid_h, grid_w]
         """
         B, C, H, W = img.shape
@@ -140,12 +144,45 @@ class DenseClip(nn.Module):
         x_tokens = x_tokens + new_pos_embed
         x_tokens = self.visual.ln_pre(x_tokens)
 
-        # 2. Transformer 前 L-1 层
+        # 2. Transformer 层
         blocks = self.visual.transformer.resblocks
-        for i in range(len(blocks) - 1):
-            x_tokens = blocks[i](x_tokens)
+        num_layers = len(blocks)
 
-        # 3. 最后一层 Self-Self Attention (ClearCLIP)
+        # 用于存储中间层的互相关注意力 (用于 ResCLIP)
+        intermediate_attn = None
+
+        # 2.1 前向传播至倒数第二层，并提取中间层注意力
+        for i in range(num_layers - 1):
+            # 对于倒数第二层，我们需要提取其 Query-Key 注意力
+            if self.use_resclip and i == num_layers + self.resclip_layer:
+                # 手动计算该层的 Query-Key 注意力
+                block = blocks[i]
+                # 获取该层的 Q 和 K
+                # 注意：这里需要进入 block 内部计算，但为了不破坏原有结构，我们复制一份计算逻辑
+                # 更简洁的方式是直接使用 block 的 forward，但我们需要的是注意力矩阵，而不是输出
+                # 这里采用与原始 CLIP 一致的计算方式
+                x_norm_mid = block.ln_1(x_tokens)
+                attn_mid = block.attn
+                qkv_mid = F.linear(x_norm_mid, attn_mid.in_proj_weight, attn_mid.in_proj_bias)
+                q_mid, k_mid, _ = qkv_mid.chunk(3, dim=-1)
+                
+                B_mid, N_mid, D_mid = q_mid.shape
+                num_heads_mid = attn_mid.num_heads
+                head_dim_mid = D_mid // num_heads_mid
+                
+                q_mid = q_mid.view(B_mid, N_mid, num_heads_mid, head_dim_mid).transpose(1, 2)
+                k_mid = k_mid.view(B_mid, N_mid, num_heads_mid, head_dim_mid).transpose(1, 2)
+                
+                # 计算 Query-Key 互相关注意力 (非最终层具有空间定位能力)
+                mid_attn_matrix = (q_mid @ k_mid.transpose(-2, -1)) * (head_dim_mid ** -0.5)
+                intermediate_attn = mid_attn_matrix.softmax(dim=-1)
+                
+                # 继续正常的前向传播
+                x_tokens = block(x_tokens)
+            else:
+                x_tokens = blocks[i](x_tokens)
+
+        # 3. 最后一层 Self-Self Attention (ClearCLIP) + ResCLIP 融合
         last_block = blocks[-1]
         x_norm = last_block.ln_1(x_tokens)
         attn = last_block.attn
@@ -156,12 +193,36 @@ class DenseClip(nn.Module):
         num_heads = attn.num_heads
         head_dim = D // num_heads
 
-        q = q.view(B, N, num_heads, head_dim).transpose(1, 2)
+        q = q.view(B, N, num_heads, head_dim).transpose(1, 2)  # [B, heads, N, hd]
         v = v.view(B, N, num_heads, head_dim).transpose(1, 2)
 
+        # 3.1 计算原始的 Query-Query 自注意力 (ClearCLIP)
         attn_matrix = (q @ q.transpose(-2, -1)) * (head_dim ** -0.5)
-        attn_matrix = attn_matrix.softmax(dim=-1)
-        attn_out = (attn_matrix @ v).transpose(1, 2).reshape(B, N, -1)
+        attn_matrix_qq = attn_matrix.softmax(dim=-1)
+
+        # 3.2 如果启用 ResCLIP，进行残差融合
+        if self.use_resclip and intermediate_attn is not None:
+            # 中间层注意力是 [B, heads_mid, N, N]，需要确保与当前注意力形状一致
+            # 如果中间层的 head 数量不同，需要进行平均或投影
+            if intermediate_attn.shape[1] != num_heads:
+                # 如果 heads 数量不同，在 head 维度进行平均
+                intermediate_attn = intermediate_attn.mean(dim=1, keepdim=True)
+                intermediate_attn = intermediate_attn.expand(-1, num_heads, -1, -1)
+            
+            # 将中间层注意力移到与当前张量相同的设备和数据类型
+            intermediate_attn = intermediate_attn.to(device=attn_matrix_qq.device, dtype=attn_matrix_qq.dtype)
+            
+            # 残差融合: 新的注意力 = (1 - alpha) * 最后层注意力 + alpha * 中间层注意力
+            # 注意：这里使用残差连接的思想，融合两种注意力
+            attn_matrix_fused = (1 - self.resclip_alpha) * attn_matrix_qq + self.resclip_alpha * intermediate_attn
+            # 重新归一化
+            attn_matrix_fused = attn_matrix_fused / (attn_matrix_fused.sum(dim=-1, keepdim=True) + 1e-8)
+            
+            # 使用融合后的注意力对 Value 进行加权
+            attn_out = (attn_matrix_fused @ v).transpose(1, 2).reshape(B, N, -1)
+        else:
+            # 原始 ClearCLIP 路径
+            attn_out = (attn_matrix_qq @ v).transpose(1, 2).reshape(B, N, -1)
 
         x_feat = F.linear(attn_out, attn.out_proj.weight, attn.out_proj.bias)
         x_feat = self.visual.ln_post(x_feat)
@@ -178,19 +239,15 @@ class DenseClip(nn.Module):
     def _stem(self, x, hr_guide: Optional[torch.Tensor] = None):
         B, C, H, W = x.shape
 
-        # --- 针对 SatUp 的特殊处理：与 infer.py 完全一致 ---
+        # --- 针对 SatUp 的特殊处理 ---
         if isinstance(self.up, SatUp):
-            # 1. 下采样输入图像
             lr_img = x
-            # 2. 从下采样图像提取 ClearCLIP 特征
             lr_features = self._extract_clearclip_features(lr_img)
-            # 3. 调用 SatUp 上采样至原始尺寸
             up_features = self.up(lr_img, lr_features, output_size=(H, W))
             return up_features
 
-        # 注意：原有逻辑是从高分辨率图像 x 提取特征，然后上采样
-        lr_features = self._extract_clearclip_features(x)  # 高分辨率下的低分辨率特征图
-        # guide = hr_guide if hr_guide is not None else x
+        # 通用流程
+        lr_features = self._extract_clearclip_features(x)
         guide = x
 
         if self.up is not None:

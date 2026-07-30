@@ -197,7 +197,7 @@ def infer_single_image(
             ax[0].set_title("Original Image")
             ax[0].axis("off")
             ax[1].imshow(seg_result.permute(1, 2, 0).numpy())
-            ax[1].set_title("GLA + SatUp (smoothed)")
+            ax[1].set_title("ResQQ + SatUp")
             ax[1].axis("off")
             patches = [mpatches.Patch(color=legend_colors[i], label=classnames[i]) for i in range(C)]
             fig.legend(handles=patches, loc="center right", title="Land Cover Classes")
