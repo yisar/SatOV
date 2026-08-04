@@ -10,7 +10,7 @@ from satup.model import SatUp
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-class DenseClip(nn.Module):
+class CLIPResQQ(nn.Module):
     def __init__(
         self,
         name: str,

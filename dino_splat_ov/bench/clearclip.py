@@ -14,7 +14,7 @@ from torchvision import transforms
 from torchvision.utils import draw_segmentation_masks
 root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
-from model import DenseClip   # 请确保 model.py 中定义了 DenseClip
+from model import CLIPResQQ   # 请确保 model.py 中定义了 CLIPResQQ
 
 
 # ==================== PAMR 模块定义 ====================
@@ -170,7 +170,7 @@ def main():
     legend_colors = [tuple(c / 255 for c in color) for color in custom_palette]
 
     # 加载模型
-    model = DenseClip("ViT-B-16", classnames, device=args.device, only_clear=True, upsampler="222")
+    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, only_clear=True, upsampler="222")
     model.eval()
 
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082), (0.2686, 0.2613, 0.2757))

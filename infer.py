@@ -17,7 +17,7 @@ from pydensecrf.utils import (
     unary_from_softmax,
 )
 
-from model import DenseClip
+from model import CLIPResQQ
 
 
 def apply_dense_crf(img_np, probs_np):
@@ -206,7 +206,7 @@ def infer_single_image(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DenseClip 遥感影像批量分割推理")
+    parser = argparse.ArgumentParser(description="CLIPResQQ 遥感影像批量分割推理")
     default_device = "cuda" if torch.cuda.is_available() else "cpu"
     parser.add_argument("--device", type=str, default=default_device)
     # 单文件模式
@@ -254,7 +254,7 @@ def main():
     ]
 
     # 加载模型并固定eval
-    model = DenseClip("ViT-B-16", classnames, device=args.device, upsampler="satup" )
+    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, upsampler="satup" )
     model.eval()
 
     # 创建输出文件夹
@@ -280,7 +280,7 @@ def main():
     # 分支2：批量文件夹推理
     elif args.input_dir is not None and os.path.isdir(args.input_dir):
         # 支持常见图片格式
-        img_exts = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG")
+        img_exts = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG", "*.tif")
         img_paths = []
         for ext in img_exts:
             img_paths.extend(glob.glob(os.path.join(args.input_dir, ext)))

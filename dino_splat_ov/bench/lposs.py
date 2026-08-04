@@ -18,7 +18,7 @@ from kornia.color import rgb_to_lab
 
 root_path = Path(__file__).parent.parent
 sys.path.append(str(root_path))
-from model import DenseClip
+from model import CLIPResQQ
 
 
 # ======================== LPOSS CORE ========================
@@ -196,7 +196,7 @@ def main():
         (253, 231, 37),
     ]
 
-    model = DenseClip("ViT-B-16", classnames, device=device, only_clear=True)
+    model = CLIPResQQ("ViT-B-16", classnames, device=device, only_clear=True)
     model.eval()
 
     clip_norm = transforms.Normalize((0.4814, 0.4578, 0.4082),
