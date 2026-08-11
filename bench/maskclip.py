@@ -128,6 +128,7 @@ class MaskClip(nn.Module):
         return img_feat, feats  # 返回原始特征+投影特征，用于
 
 def run_inference(image_path, labels, save_path):
+    print(image_path)
     custom_palette = np.array([
         (68, 1, 84), (72, 40, 120), (62, 74, 137), (49, 104, 142),
         (38, 130, 142), (31, 158, 137), (73, 193, 110), (160, 218, 57), (253, 231, 37)
@@ -171,7 +172,4 @@ if __name__ == "__main__":
         'background', 'bareland', 'pavement', 'road', 'water',
         'tree', 'grass', 'cropland', 'building'
     ]
-    try:
-        run_inference("./data/UDD6/origin/DJI_0431.JPG", target_labels,"./bench/vis/0431_maskclip.png")
-    except FileNotFoundError:
-        print("❌ 找不到图片，请检查 img2.jpg 是否在当前目录下。")
+    run_inference("./dino_splat_ov/asset/vis/origin/16_0_2.tif", target_labels,"./dino_splat_ov/asset/vis/maskclip/16_0_2.tif")
