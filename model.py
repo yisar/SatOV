@@ -18,17 +18,15 @@ class CLIPResQQ(nn.Module):
         templates: List[str] = None,
         device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu",
         jit: bool = False,
-        only_clear: bool = False,
-        upsampler: str = "gfup",
+        upsampler: str = "gsup",
         # ResCLIP 相关参数
-        use_resclip: bool = True,
+        use_resclip: bool = False,
         resclip_alpha: float = 0.5,  # 残差融合权重
         resclip_layer: int = -2,     # 提取中间层 (-2 表示倒数第二层)
     ):
         super().__init__()
         self.device = torch.device(device)
         self.model_name = name
-        self.only_clear = only_clear
         self.use_resclip = use_resclip
         self.resclip_alpha = resclip_alpha
         self.resclip_layer = resclip_layer
@@ -63,7 +61,7 @@ class CLIPResQQ(nn.Module):
             ckpt = torch.load("satup.pth", map_location=self.device)
             self.up.load_state_dict(ckpt, strict=True)
             self.up.eval()
-        elif upsampler == "gsu":
+        elif upsampler == "gsup":
             self.up = GaussianUpsamplerWrapper()
 
         # 4. 视觉投影层 (1x1 conv)

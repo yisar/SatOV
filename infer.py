@@ -233,7 +233,7 @@ def main():
         "bareland,barren",
         "pavement",
         "road",
-        "water,river",
+        "water,river,pool",
         "tree,forest",
         "grass",
         "cropland,field",
@@ -254,7 +254,7 @@ def main():
     ]
 
     # 加载模型并固定eval
-    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, upsampler="satup" )
+    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, upsampler="aaa" )
     model.eval()
 
     # 创建输出文件夹

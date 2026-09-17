@@ -172,4 +172,4 @@ if __name__ == "__main__":
         'background', 'bareland', 'pavement', 'road', 'water',
         'tree', 'grass', 'cropland', 'building'
     ]
-    run_inference("./dino_splat_ov/asset/vis/origin/16_0_2.tif", target_labels,"./dino_splat_ov/asset/vis/maskclip/16_0_2.tif")
+    run_inference("./asset/img3.jpg", target_labels,"./dino_splat_ov/asset/vis3/maskclip.png")

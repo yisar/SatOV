@@ -8,14 +8,14 @@
     .grid-wrap {
         margin: 0 auto;
         display: grid;
-        grid-template-columns: 1fr 1fr; 
+        grid-template-columns: 1fr 1fr 1fr;
         gap: 8px;
     }
 
     ul {
         list-style: none;
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr 1fr;
         gap: 8px;
         padding: 0 10px;
 
@@ -43,8 +43,25 @@
 </style>
 
 <ul>
-    <li><p>Origin</p><img src="./P0492.png" alt=""></li>
-    <li><p>DINO.txt</p><img src="./dino_txt.png" alt=""></li>
-    <li><p>with TLP</p><img src="./w_lap.png" alt=""></li>
-    <li><p>with GSUP</p><img src="./w_gsup.png" alt=""></li>
+    <li>
+        <p>Origin</p><img src="./img3.jpg" alt="">
+    </li>
+    <li>
+        <p>baseline(MaskCLIP)</p><img src="./maskclip.png" alt="">
+    </li>
+    <li>
+        <p>w/ QQ && Debais(ClearCLIP)</p><img src="./w_qq.png" alt="">
+
+
+    <li>
+        <p>w/ ResQQ(Ours)</p><img src="./w_resqq.png" alt="">
+    </li>
+        </li>
+
+        <li>
+        <p>w/ SatUp(Ours)</p><img src="./w_satup.png" alt="">
+    </li>
+    <li>
+        <p>w/ CRF Refine</p><img src="./w_all.png" alt="">
+    </li>
 </ul>
