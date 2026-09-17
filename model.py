@@ -20,7 +20,7 @@ class CLIPResQQ(nn.Module):
         jit: bool = False,
         upsampler: str = "gsup",
         # ResCLIP 相关参数
-        use_resclip: bool = False,
+        use_resclip: bool = True,
         resclip_alpha: float = 0.5,  # 残差融合权重
         resclip_layer: int = -2,     # 提取中间层 (-2 表示倒数第二层)
     ):
