@@ -148,16 +148,17 @@ def infer_single_image(
         acc_probs = torch.zeros((C, h, w), dtype=torch.float32, device=device)
         acc_weights = torch.zeros((h, w), dtype=torch.float32, device=device)
 
-        # ---- 新增：生成二维汉宁窗 ----
-        hann_1d = torch.hann_window(win, device=device)        # [win]
-        hann_2d = torch.outer(hann_1d, hann_1d)                # [win, win]
-        # ------------------------------
+        x = torch.linspace(-1, 1, win, device=device)
+        y = torch.linspace(-1, 1, win, device=device)
+        xx, yy = torch.meshgrid(x, y, indexing="ij")
+        sigma = 0.2
+        gauss_2d = torch.exp(-(xx**2 + yy**2) / (2 * sigma**2))
 
         for idx, (y, x) in enumerate(all_positions):
             prob = all_probs[idx].to(device)          # [C, win, win]
             attn_map = attn_maps_win[idx]             # [1, win, win]
             # ---- 新增：乘以汉宁窗（空间平滑） ----
-            attn_map = attn_map * hann_2d
+            attn_map = attn_map * gauss_2d
             # --------------------------------------
             attn_map = attn_map + 1e-4
             acc_probs[:, y:y+win, x:x+win] += prob * attn_map
@@ -233,7 +234,7 @@ def main():
         "bareland,barren",
         "pavement",
         "road",
-        "water,river,pool",
+        "water,river",
         "tree,forest",
         "grass",
         "cropland,field",
@@ -254,7 +255,7 @@ def main():
     ]
 
     # 加载模型并固定eval
-    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, upsampler="aaa" )
+    model = CLIPResQQ("ViT-B-16", classnames, device=args.device, upsampler="satup" )
     model.eval()
 
     # 创建输出文件夹

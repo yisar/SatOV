@@ -103,9 +103,17 @@ class CLIPResQQ(nn.Module):
                 class_embed = self.clip_model.encode_text(tokens)
                 class_embed = F.normalize(class_embed, dim=-1)
                 group_embeds.append(class_embed.mean(dim=0))
-            combined_embed = torch.stack(group_embeds, dim=0).mean(dim=0)
+
+            # --- 方案二：两两相似度 softmax 加权平均 ---
+            group_embeds = torch.stack(group_embeds, dim=0)          # [K, D]
+            group_embeds = F.normalize(group_embeds, dim=-1)
+            sim = group_embeds @ group_embeds.T                      # [K, K]
+            scores = sim.sum(dim=1)                                  # [K]
+            weights = F.softmax(scores / 0.07, dim=0)                # [K]
+            combined_embed = (weights.unsqueeze(-1) * group_embeds).sum(dim=0)
             combined_embed = F.normalize(combined_embed, dim=-1)
             final_text_embeds.append(combined_embed)
+
         weights = torch.stack(final_text_embeds, dim=1).to(self.device)
         self.zeroshot_weights = nn.Parameter(weights)
 
@@ -163,18 +171,18 @@ class CLIPResQQ(nn.Module):
                 attn_mid = block.attn
                 qkv_mid = F.linear(x_norm_mid, attn_mid.in_proj_weight, attn_mid.in_proj_bias)
                 q_mid, k_mid, _ = qkv_mid.chunk(3, dim=-1)
-                
+
                 B_mid, N_mid, D_mid = q_mid.shape
                 num_heads_mid = attn_mid.num_heads
                 head_dim_mid = D_mid // num_heads_mid
-                
+
                 q_mid = q_mid.view(B_mid, N_mid, num_heads_mid, head_dim_mid).transpose(1, 2)
                 k_mid = k_mid.view(B_mid, N_mid, num_heads_mid, head_dim_mid).transpose(1, 2)
-                
+
                 # 计算 Query-Key 互相关注意力 (非最终层具有空间定位能力)
                 mid_attn_matrix = (q_mid @ k_mid.transpose(-2, -1)) * (head_dim_mid ** -0.5)
                 intermediate_attn = mid_attn_matrix.softmax(dim=-1)
-                
+
                 # 继续正常的前向传播
                 x_tokens = block(x_tokens)
             else:
@@ -206,16 +214,16 @@ class CLIPResQQ(nn.Module):
                 # 如果 heads 数量不同，在 head 维度进行平均
                 intermediate_attn = intermediate_attn.mean(dim=1, keepdim=True)
                 intermediate_attn = intermediate_attn.expand(-1, num_heads, -1, -1)
-            
+
             # 将中间层注意力移到与当前张量相同的设备和数据类型
             intermediate_attn = intermediate_attn.to(device=attn_matrix_qq.device, dtype=attn_matrix_qq.dtype)
-            
+
             # 残差融合: 新的注意力 = (1 - alpha) * 最后层注意力 + alpha * 中间层注意力
             # 注意：这里使用残差连接的思想，融合两种注意力
             attn_matrix_fused = (1 - self.resclip_alpha) * attn_matrix_qq + self.resclip_alpha * intermediate_attn
             # 重新归一化
             attn_matrix_fused = attn_matrix_fused / (attn_matrix_fused.sum(dim=-1, keepdim=True) + 1e-8)
-            
+
             # 使用融合后的注意力对 Value 进行加权
             attn_out = (attn_matrix_fused @ v).transpose(1, 2).reshape(B, N, -1)
         else:
