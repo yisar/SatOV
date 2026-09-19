@@ -1,0 +1,247 @@
+Electromagnetic Regime
+
+Passive
+
+Optical/Reflective
+
+Multispectral
+
+Hyperspectral
+
+Thermal Infrared
+
+Microwave
+
+Active
+
+Lidar
+
+Radar
+
+Electromagnetic Regime – other
+
+Science and Application Areas
+
+Terrestrial
+
+Agriculture
+
+Biogeochemistry
+
+Coastal
+
+Ecology
+
+Environment, including climate/global change
+
+Fire
+
+Forests
+
+Geology and Mineral Resources
+
+Geography
+
+Hydrology
+
+Ice and Snow
+
+Land Cover and Land Use
+
+Limnology
+
+Natural Hazards and Disaster Assessment
+
+Range
+
+Rivers and Streams
+
+Tectonics
+
+Urban
+
+Volcanology
+
+Water Resources
+
+Other
+
+Ocean
+
+Biogeochemistry
+
+Color
+
+Dynamics
+
+Sea Level
+
+Sea Ice
+
+Sea Surface Temperature
+
+Surface Properties
+
+Waves
+
+Ocean Currents
+
+Surface Winds
+
+Tides
+
+Other
+
+Atmosphere
+
+Atmospheric Effects
+
+Atmospheric Correction
+
+Interactions with Land/Sea
+
+Processes and Dynamics
+
+Cloud Cover and Properties
+
+Aerosols
+
+Water Vapor
+
+Chemistry
+
+Solar Radiation
+
+Precipitation
+
+Other
+
+Science and Application Areas – other
+
+Image Data/Signal Processing and Analysis
+
+Image Registration and Rectification
+
+Image Enhancement
+
+Image Transformation
+
+Data Compression
+
+Radiometric Normalization and Correction
+
+Algorithm Development
+
+Image Classfication
+
+Multitemporal Analysis and Change Detection
+
+Accuracy Assessment
+
+Geographic Information Systems
+
+Radar Data Processing, including Interferometry and Polarimetry
+
+Other
+
+Image Data/Signal Processing and Analysis – other
+
+Models and Modeling
+
+Biophysical-Spectral
+
+Climate Change
+
+Ecosystem
+
+Geostatistical
+
+Process
+
+Radiative Transfer
+
+Radar Backscatter
+
+Other
+
+Models and Modeling – other
+
+Laboratory and Field Measurements
+
+Vegetation
+
+Soil
+
+Water
+
+Geology
+
+Minerals
+
+Ice and Snow
+
+Ocean
+
+Other
+
+Laboratory and Field Measurements – other
+
+Sensor
+
+Development
+
+Calibration
+
+Validation and Verification
+
+Orbit and Mission Analyses, including new missions
+
+Other
+
+Sensor – other
+
+Scale (Geographical Extent)
+
+Local - State
+
+State - Region
+
+Region - Country
+
+Country - Continental
+
+Continental - Global
+
+Mesoscale
+
+Synoptic Scale
+
+Ocean Basin
+
+Scale (Geographical Extent) – other
+
+Spatial Resolution
+
+High, < 5 meters
+
+Medium, 5 - 100 meters
+
+Low, 100 - 1000 meters
+
+Very Low, > 1000 meters
+
+Spatial Resolution – other
+
+Research, Development, Application, Education, and Technology Transfer
+
+Research
+
+Development
+
+Application
+
+Education, Outreach
+
+Technology Transfer
+
+Research, Development, Application, Education, and Technology Transfer – other
