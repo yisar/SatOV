@@ -228,29 +228,47 @@ def main():
     args = parse_args()
     print(f"使用设备: {args.device}")
 
-    # 固定类别与配色
+    # # 固定类别与配色
+    # classnames = [
+    #     "background",
+    #     "bareland,barren",
+    #     "pavement",
+    #     "road",
+    #     "water,river",
+    #     "tree,forest",
+    #     "grass",
+    #     "cropland,field",
+    #     "building,roof,house",
+    #     # "playground"
+    # ]
+    # custom_palette = [
+    #     (68, 1, 84),
+    #     (72, 40, 120),
+    #     (62, 74, 137),
+    #     (49, 104, 142),
+    #     (38, 130, 142),
+    #     (31, 158, 137),
+    #     (73, 193, 110),
+    #     (160, 218, 57),
+    #     (253, 231, 37),
+    #     # (250, 200, 20)
+    # ]
+
+        # 固定类别与配色
     classnames = [
-        "background",
-        "bareland,barren",
-        "pavement",
-        "road",
-        "water,river",
-        "tree,forest",
+        "field",
+        "building",
         "grass",
-        "cropland,field",
-        "building,roof,house",
+        "cropland",
         # "playground"
     ]
     custom_palette = [
-        (68, 1, 84),
-        (72, 40, 120),
-        (62, 74, 137),
-        (49, 104, 142),
-        (38, 130, 142),
-        (31, 158, 137),
-        (73, 193, 110),
-        (160, 218, 57),
-        (253, 231, 37),
+        (0, 73, 0),
+        (254, 184, 0),
+        (247, 13, 0),
+        (150, 173, 0),
+        
+        
         # (250, 200, 20)
     ]
 
