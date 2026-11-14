@@ -276,7 +276,7 @@ class GaussianFeatureUpsampler(nn.Module):
 
 
 def main(
-    image_path: Path = Path("asset/4072.png"),
+    image_path: Path = Path("asset/_3609.png"),
     output_path: Path = Path("output.png"),
     resize_size: tuple[int, int] = (224, 224),
     device_str="cpu",
