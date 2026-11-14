@@ -62,7 +62,7 @@ class GaussianFeatureUpsampler(nn.Module):
         patch_coords_hr: torch.Tensor,
         pixels_lr: torch.Tensor,
         pixels_hr: torch.Tensor,
-        init_sigma: float = 8.0,
+        init_sigma: float = 0.12,
         init_range: float = 0.12,
         init_orientation: float = 0.0,
         max_radius: int = 6,
