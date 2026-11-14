@@ -1,0 +1,68 @@
+<style>
+    * {
+        padding: 0;
+        margin: 0;
+    }
+
+    div {
+        display: flex;
+        gap: 10px;
+
+    }
+
+    ul {
+        list-style: none;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        /* border-radius: 5px; */
+        box-sizing: border-box;
+        position: relative;
+
+    }
+
+    ul li {
+        flex: 1;
+        /* background: #eee; */
+        text-align: center;
+        justify-content: center;
+        align-items: center;
+        /* margin: 5px; */
+    }
+
+    ul li img {
+        width: 100%;
+        aspect-ratio: 1.1;
+        object-fit: cover
+    }
+
+    p {
+        font-weight: bold;
+    }
+</style>
+<div>
+
+    <ul>
+        <li>
+            <p>Orign</p><img src="./000.png" alt=""><img src="./img.jpg" alt="">
+        </li>
+        <li>
+            <p>w/o TGMM</p><img src="./000_raw.png" alt=""><img src="./img_raw.png" alt="">
+        </li>
+        <li>
+            <p>w/ TGMM</p><img src="./000_gmm.png" alt=""><img src="./img_gmm.png" alt="">
+        </li>
+    </ul>
+    <ul>
+        <li>
+            <p>Orign</p><img src="./img3.png" alt=""><img src="./river.png" alt="">
+        </li>
+        <li>
+            <p>w/o TGMM</p><img src="./img3_raw.png" alt=""><img src="./river_raw.png" alt="">
+        </li>
+        <li>
+            <p>w/ TGMM</p><img src="./img3_gmm.png" alt=""><img src="./river_gmm.png" alt="">
+        </li>
+    </ul>
+</div>

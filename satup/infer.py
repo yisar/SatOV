@@ -6,7 +6,7 @@ from PIL import Image
 from transformers import AutoImageProcessor, Dinov2Model
 
 # ===================== 配置区（按需修改）=====================
-local_img_path = "asset/9.png"  # 本地图片路径
+local_img_path = "asset/4072.png"  # 本地图片路径
 img_size = 448                 # 输入统一分辨率
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # ==========================================================

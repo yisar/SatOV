@@ -32,7 +32,7 @@ print("Model loaded successfully.")
 # 3. Load image
 # =========================================================
 
-image_path = "asset/9.png"
+image_path = "asset/4072.png"
 
 image = Image.open(image_path).convert("RGB")
 

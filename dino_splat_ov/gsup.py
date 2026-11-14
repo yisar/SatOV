@@ -10,6 +10,10 @@ import torchvision
 from einops import rearrange, reduce, repeat, einsum
 import jsonargparse
 
+import os
+# hf-mirror镜像
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 
 def _compute_h_lim_w_lim(height, width):
     h_lim, w_lim = 1 - 1 / height, 1 - 1 / width
@@ -272,7 +276,7 @@ class GaussianFeatureUpsampler(nn.Module):
 
 
 def main(
-    image_path: Path = Path("asset/9.png"),
+    image_path: Path = Path("asset/4072.png"),
     output_path: Path = Path("output.png"),
     resize_size: tuple[int, int] = (224, 224),
     device_str="cpu",
