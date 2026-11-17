@@ -24,8 +24,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device).eval()
 
 
-win_size = 200
-stride = 100
+win_size = 128
+stride = 64
 class_groups = [
     ["bus,car"],
     ["road",],
