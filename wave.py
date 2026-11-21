@@ -1,0 +1,319 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+
+
+class BandAgnosticGuidanceMax(nn.Module):
+    def __init__(
+        self,
+        out_dim: int = 128,
+        num_basis: int = 32,
+    ):
+        super().__init__()
+        self.out_dim = out_dim
+        self.num_basis = num_basis
+
+        self.basis_conv = nn.Conv2d(1, num_basis, kernel_size=1, bias=False)
+        self.basis_to_feat = nn.Sequential(
+            nn.Conv2d(num_basis, out_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(8, out_dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, image: torch.Tensor, return_intermediates=True):
+        B, C, H, W = image.shape
+        x = image.reshape(B * C, 1, H, W)
+        basis_resp = self.basis_conv(x)
+        basis_resp = F.softmax(basis_resp, dim=1)
+
+        feat = self.basis_to_feat(basis_resp)
+        feat_bandwise = feat.view(B, C, self.out_dim, H, W)  # [B,C,D,H,W]
+
+        feat_agg_max = feat_bandwise.max(dim=1).values
+        feat_agg_mean = feat_bandwise.mean(dim=1)
+
+        if return_intermediates:
+            return {
+                "basis_resp": basis_resp,
+                "feat_agg_max": feat_agg_max,
+                "feat_agg_mean": feat_agg_mean
+            }
+        return feat_agg_max
+
+
+def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
+    # Create a grid of coordinates
+    x = torch.linspace(start, end, h, device=device, dtype=dtype)
+    y = torch.linspace(start, end, w, device=device, dtype=dtype)
+    # Create a 2D map using meshgrid
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+    # Stack the x and y coordinates to create the final map
+    coord_map = torch.stack([xx, yy], axis=-1)[None, ...]
+    coords = rearrange(coord_map, "b h w c -> b (h w) c", h=h, w=w)
+    return coords
+
+
+# Convolutions
+class EncBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        norm_kwargs={},
+        pad_mode="zeros",
+        norm_fn=None,
+        activation_fn=nn.SiLU,
+        use_conv_shortcut=False,
+        bias=True,
+        residual=False,
+    ):
+        super().__init__()
+        self.use_conv_shortcut = use_conv_shortcut
+        self.norm1 = norm_fn(**norm_kwargs)
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            padding_mode=pad_mode,
+            bias=bias,
+        )
+        self.norm2 = norm_fn(**norm_kwargs)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            padding_mode=pad_mode,
+            bias=bias,
+        )
+        self.activation_fn = activation_fn()
+        if in_channels != out_channels:
+            self.shortcut = nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=1,
+                padding=0,
+                padding_mode=pad_mode,
+                bias=bias,
+            )
+        self.residual = residual
+
+    def forward(self, x):
+        residual = x
+        x = self.norm1(x)
+        x = self.activation_fn(x)
+        x = self.conv1(x)
+        x = self.norm2(x)
+        x = self.activation_fn(x)
+        x = self.conv2(x)
+        if self.use_conv_shortcut or residual.shape != x.shape:
+            residual = self.shortcut(residual)
+        if self.residual:
+            return x + residual
+        return x
+
+
+def encoder(
+    in_dim,
+    hidden_dim,
+    kernel_size=1,
+    ks_res=1,
+    num_layers=2,
+    bias=True,
+    num_groups=8,
+    residual=False,
+):
+    return nn.Sequential(
+        nn.Conv2d(
+            in_dim,
+            hidden_dim,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            padding_mode="reflect",
+            bias=bias,
+        ),
+        *[
+            EncBlock(
+                hidden_dim,
+                hidden_dim,
+                kernel_size=ks_res,
+                pad_mode="reflect",
+                norm_fn=nn.GroupNorm,
+                norm_kwargs={"num_groups": num_groups, "num_channels": hidden_dim},
+                activation_fn=nn.SiLU,
+                use_conv_shortcut=False,
+                bias=bias,
+                residual=residual,
+            )
+            for _ in range(num_layers)
+        ],
+    )
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, query_dim, key_dim, value_dim, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = query_dim // num_heads
+
+        self.norm_q = nn.LayerNorm(query_dim)
+        self.norm_k = nn.LayerNorm(key_dim)
+        self.norm_v = nn.LayerNorm(value_dim)
+
+        self.q_proj = nn.Linear(query_dim, query_dim)
+        self.k_proj = nn.Linear(key_dim, query_dim)
+        self.v_proj = nn.Linear(value_dim, query_dim)
+        self.out_proj = nn.Linear(query_dim, value_dim)  # 128 -> 768
+
+    def forward(self, query, key, value):
+        B, N_q, _ = query.shape
+        _, N_k, _ = key.shape
+
+        q = self.q_proj(self.norm_q(query))
+        k = self.k_proj(self.norm_k(key))
+        v = self.v_proj(self.norm_v(value))
+
+        q = q.view(B, N_q, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
+
+        attn = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn = attn.softmax(dim=-1)
+
+        out = (attn @ v).transpose(1, 2).reshape(B, N_q, -1)
+        out = self.out_proj(out)  # 投影回 768
+
+        return out, attn
+
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, query_dim, key_dim, value_dim, num_heads, **kwargs):
+        super().__init__()
+        self.cross_attn = CrossAttention(
+            query_dim,
+            key_dim,
+            value_dim,
+            num_heads,
+        )
+        self.conv2d = nn.Conv2d(
+            query_dim, query_dim, kernel_size=3, stride=1, padding=1, bias=False
+        )
+
+    def forward(self, q, k, v, **kwargs):
+        q = self.conv2d(q)
+        q = rearrange(q, "b c h w -> b (h w) c")
+        k = rearrange(k, "b c h w -> b (h w) c")
+        v = rearrange(v, "b c h w -> b (h w) c")
+        features, _ = self.cross_attn(q, k, v)
+        return features
+
+
+def rotate_half(x):
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+class RoPE(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        theta: int = 100,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.theta = theta
+        freqs = torch.zeros(2, self.dim)
+        self.register_buffer('freqs', freqs, persistent=False)
+        self._init_freqs()
+
+    def _init_freqs(self):
+        freqs_1d = self.theta ** torch.linspace(0, -1, self.dim // 4, device=self.freqs.device)
+        freqs_1d = torch.cat([freqs_1d, freqs_1d])
+        freqs_2d = torch.zeros(2, self.dim, device=self.freqs.device)
+        freqs_2d[0, : self.dim // 2] = freqs_1d
+        freqs_2d[1, -self.dim // 2:] = freqs_1d
+        self.freqs.copy_(freqs_2d * 2 * torch.pi)
+
+    def forward(self, x: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+        angle = coords @ self.freqs
+        return x * angle.cos() + rotate_half(x) * angle.sin()
+
+
+class SFT(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=1):
+        super().__init__()
+        self.gamma = nn.Conv2d(
+            in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
+        )
+        self.beta = nn.Conv2d(
+            in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
+        )
+
+        self.norm = nn.GroupNorm(num_groups=8, num_channels=in_channels, affine=False)
+
+    def forward(self, image, features):
+        gamma = self.gamma(features)
+        beta = self.beta(features)
+        return gamma * self.norm(image) + beta  # Spatial modulation
+
+
+class SatUp(nn.Module):
+    def __init__(
+        self,
+        dim=128,
+        v_dim=384,
+        kernel_size=3,
+        num_heads=4,
+        num_basis=32
+    ):
+        super().__init__()
+        # ========= 核心改动：替换原来的CNN image_encoder为BandAgnosticGuidanceMax =========
+        self.image_encoder = BandAgnosticGuidanceMax(out_dim=dim, num_basis=num_basis)
+
+        self.key_encoder = encoder(dim, dim, kernel_size=1, bias=False, residual=True)
+        self.query_encoder = encoder(dim, dim, kernel_size=1, bias=False, residual=True)
+
+        self.norm = nn.GroupNorm(num_groups=8, num_channels=dim, affine=False)
+        self.key_features_encoder = encoder(
+            v_dim, dim, kernel_size=1, bias=False, residual=True
+        )
+        self.cross_decode = CrossAttentionBlock(dim, dim, v_dim, num_heads)
+        self.sft_key = SFT(dim, dim)
+        self.rope = RoPE(dim)
+
+    def upsample(self, encoded_image, features, output_size):
+        _, _, h, w = features.shape
+        # Process Queries
+        queries = self.query_encoder(encoded_image)
+        queries = F.adaptive_avg_pool2d(queries, output_size=output_size)
+        queries = self.norm(queries)
+        # Process Keys and Values.
+        keys = self.key_encoder(encoded_image)
+        keys = F.adaptive_avg_pool2d(keys, output_size=(h, w))
+        keys = self.sft_key(keys, self.key_features_encoder(features))
+        # Values
+        values = features
+        # Attention layer
+        out = self.cross_decode(queries, keys, values)
+        return out
+
+    def forward(self, image, features, output_size, *args, **kwargs):
+        # ========= 适配BandAgnosticGuidanceMax输出字典，取max聚合特征 =========
+        enc_out = self.image_encoder(image, return_intermediates=True)
+        encoded_image = enc_out["feat_agg_max"]  # 使用max聚合波段特征 [B,dim,H,W]
+
+        # Apply Positional Encoding
+        coords = create_coordinate(encoded_image.shape[-2], encoded_image.shape[-1],
+                                   device=encoded_image.device, dtype=encoded_image.dtype)
+        _, _, h, _ = encoded_image.shape
+        encoded_image = rearrange(encoded_image, "b c h w -> b (h w) c")
+        encoded_image = self.rope(encoded_image, coords)
+        encoded_image = rearrange(encoded_image, "b (h w) c -> b c h w", h=h)
+
+        # Get upsampled feats
+        features = self.upsample(encoded_image, features, output_size)
+        features = rearrange(features, "b (h w) c -> b c h w", h=output_size[0])
+        return features

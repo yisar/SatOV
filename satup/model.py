@@ -15,6 +15,64 @@ def create_coordinate(h, w, start=0, end=1, device="cuda", dtype=torch.float32):
     coords = rearrange(coord_map, "b h w c -> b (h w) c", h=h, w=w)
     return coords
 
+
+class BandBiasFilter(nn.Module):
+    """
+    类似 AnyUp 风格的 Bias Filter：
+    支持任意输入波段数 C_in，通过可学习的通道滤波核与偏置滤波项映射到 out_channels。
+    """
+
+    def __init__(self, out_channels: int = 3, bias_kernel_size: int = 3):
+        super().__init__()
+        self.out_channels = out_channels
+        self.bias_kernel_size = bias_kernel_size
+        # 针对不同输入波段数 C_in 懒初始化的 1x1 滤波投影与空间偏置滤波器
+        self._channel_filters = nn.ModuleDict()
+        self._spatial_bias_filters = nn.ModuleDict()
+
+    def _get_or_create_filter(self, in_channels: int, device, dtype):
+        key = str(in_channels)
+        if key not in self._channel_filters:
+            ch_filter = nn.Conv2d(
+                in_channels, self.out_channels, kernel_size=1, bias=True
+            ).to(device=device, dtype=dtype)
+            # 若输入恰好为 3 通道且输出为 3 通道，初始化为单位映射+小扰动，便于兼容 RGB 预训练权重
+            if in_channels == 3 and self.out_channels == 3:
+                with torch.no_grad():
+                    nn.init.eye_(ch_filter.weight.view(3, 3))
+                    ch_filter.bias.zero_()
+
+            # 空间偏置滤波器（Bias Filter）：捕捉局部空间偏置并调制输出
+            bias_filter = nn.Sequential(
+                nn.Conv2d(
+                    in_channels,
+                    self.out_channels,
+                    kernel_size=self.bias_kernel_size,
+                    padding=self.bias_kernel_size // 2,
+                    padding_mode="reflect",
+                    bias=True,
+                ),
+                nn.SiLU(),
+                nn.Conv2d(
+                    self.out_channels,
+                    self.out_channels,
+                    kernel_size=1,
+                    bias=True,
+                ),
+            ).to(device=device, dtype=dtype)
+
+            self._channel_filters[key] = ch_filter
+            self._spatial_bias_filters[key] = bias_filter
+
+        return self._channel_filters[key], self._spatial_bias_filters[key]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, c_in, _, _ = x.shape
+        ch_filter, bias_filter = self._get_or_create_filter(c_in, x.device, x.dtype)
+        # 滤波响应 + 空间偏置滤波项
+        return ch_filter(x) + bias_filter(x)
+
+
 # Convolutions
 class EncBlock(nn.Module):
     def __init__(
@@ -119,34 +177,34 @@ class CrossAttention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = query_dim // num_heads
-        
+
         self.norm_q = nn.LayerNorm(query_dim)
         self.norm_k = nn.LayerNorm(key_dim)
         self.norm_v = nn.LayerNorm(value_dim)
-        
+
         self.q_proj = nn.Linear(query_dim, query_dim)
         self.k_proj = nn.Linear(key_dim, query_dim)
         self.v_proj = nn.Linear(value_dim, query_dim)
-        self.out_proj = nn.Linear(query_dim, value_dim)  # 128 -> 768
+        self.out_proj = nn.Linear(query_dim, value_dim)
 
     def forward(self, query, key, value):
         B, N_q, _ = query.shape
         _, N_k, _ = key.shape
-        
+
         q = self.q_proj(self.norm_q(query))
         k = self.k_proj(self.norm_k(key))
         v = self.v_proj(self.norm_v(value))
-        
+
         q = q.view(B, N_q, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)
-        
+
         attn = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)
         attn = attn.softmax(dim=-1)
-        
+
         out = (attn @ v).transpose(1, 2).reshape(B, N_q, -1)
-        out = self.out_proj(out)  # 投影回 768
-        
+        out = self.out_proj(out)
+
         return out, attn
 
 
@@ -178,6 +236,7 @@ def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
+
 class RoPE(nn.Module):
     def __init__(
         self,
@@ -187,21 +246,16 @@ class RoPE(nn.Module):
         super().__init__()
         self.dim = dim
         self.theta = theta
-        # 改动1: 改为 buffer，不需要梯度，且初始化时自动完成
         freqs = torch.zeros(2, self.dim)
-        self.register_buffer('freqs', freqs, persistent=False)
+        self.register_buffer("freqs", freqs, persistent=False)
         self._init_freqs()
 
     def _init_freqs(self):
-        # Create freqs in 1d
         freqs_1d = self.theta ** torch.linspace(0, -1, self.dim // 4, device=self.freqs.device)
-        # duplicate freqs for rotation pairs of channels
         freqs_1d = torch.cat([freqs_1d, freqs_1d])
-        # First half of channels do x, second half do y
         freqs_2d = torch.zeros(2, self.dim, device=self.freqs.device)
         freqs_2d[0, : self.dim // 2] = freqs_1d
         freqs_2d[1, -self.dim // 2 :] = freqs_1d
-        # it's an angular freq here
         self.freqs.copy_(freqs_2d * 2 * torch.pi)
 
     def forward(self, x: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
@@ -218,13 +272,12 @@ class SFT(nn.Module):
         self.beta = nn.Conv2d(
             in_channels, out_channels, kernel_size, padding=kernel_size // 2, bias=False
         )
-        
         self.norm = nn.GroupNorm(num_groups=8, num_channels=in_channels, affine=False)
 
     def forward(self, image, features):
         gamma = self.gamma(features)
         beta = self.beta(features)
-        return gamma * self.norm(image) + beta  # Spatial modulation
+        return gamma * self.norm(image) + beta
 
 
 class SatUp(nn.Module):
@@ -234,67 +287,62 @@ class SatUp(nn.Module):
         v_dim=384,
         kernel_size=3,
         num_heads=4,
+        guide_channels=3,
     ):
         super().__init__()
 
-        # Image encoder uses kernel_size=3 for spatial context
+        # Bias Filter 支持任意输入波段，统一映射到 guide_channels（默认 3）后进入原有 image_encoder
+        self.bias_filter = BandBiasFilter(
+            out_channels=guide_channels, bias_kernel_size=kernel_size
+        )
         self.image_encoder = encoder(
-            3, dim, kernel_size=kernel_size, bias=False, residual=True
+            guide_channels, dim, kernel_size=kernel_size, bias=False, residual=True
         )
         self.key_encoder = encoder(dim, dim, kernel_size=1, bias=False, residual=True)
         self.query_encoder = encoder(dim, dim, kernel_size=1, bias=False, residual=True)
 
-        # Create Query features encoder
         self.norm = nn.GroupNorm(num_groups=8, num_channels=dim, affine=False)
 
-        # Create Key features encoder
         self.key_features_encoder = encoder(
             v_dim, dim, kernel_size=1, bias=False, residual=True
         )
         self.cross_decode = CrossAttentionBlock(dim, dim, v_dim, num_heads)
 
-        # SFT modulation for keys
         self.sft_key = SFT(dim, dim)
-
         self.rope = RoPE(dim)
-        # self.rope._device_weight_init()
 
     def upsample(self, encoded_image, features, output_size):
         _, _, h, w = features.shape
 
-        # Process Queries
         queries = self.query_encoder(encoded_image)
         queries = F.adaptive_avg_pool2d(queries, output_size=output_size)
         queries = self.norm(queries)
 
-        # Process Keys and Values.
         keys = self.key_encoder(encoded_image)
         keys = F.adaptive_avg_pool2d(keys, output_size=(h, w))
-        # keys = self.sft_key(
-        #     keys, self.key_features_encoder(F.normalize(features, dim=1))
-        # )
         keys = self.sft_key(keys, self.key_features_encoder(features))
 
-        # Values
         values = features
-
-        # Attention layer
         out = self.cross_decode(queries, keys, values)
 
         return out
 
     def forward(self, image, features, output_size, *args, **kwargs):
-        # Extract high-level features of image.
-        encoded_image = self.image_encoder(image)
+        # 经过 Bias Filter 处理任意波段引导图像
+        filtered_image = self.bias_filter(image)
+        encoded_image = self.image_encoder(filtered_image)
 
-        # Apply Positional Encoding
-        coords = create_coordinate(encoded_image.shape[-2], encoded_image.shape[-1])
+        coords = create_coordinate(
+            encoded_image.shape[-2],
+            encoded_image.shape[-1],
+            device=encoded_image.device,
+            dtype=encoded_image.dtype,
+        )
         _, _, h, _ = encoded_image.shape
         encoded_image = rearrange(encoded_image, "b c h w -> b (h w) c")
         encoded_image = self.rope(encoded_image, coords)
         encoded_image = rearrange(encoded_image, "b (h w) c -> b c h w", h=h)
 
-        # Get upsampled feats
         features = self.upsample(encoded_image, features, output_size)
         features = rearrange(features, "b (h w) c -> b c h w", h=output_size[0])
         return features
